@@ -64,7 +64,7 @@ export class Utils {
      * @param constructorArgs - Arguments to pass to the class constructor.
      * @returns A promise resolving to an instance of the loaded class.
      */
-    static loadClassInstance(
+    static loadManifest(
         filePath: string,
         ...constructorArgs: any[]
     ): Promise<any> {

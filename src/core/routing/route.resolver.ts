@@ -18,10 +18,11 @@ export class RouteResolver {
                 const files = await Utils.getFilesWithPhrase(this.path, 'manifest.')
                 const anyApp: any = app
                 for (let filepath of files) {
-                    const instance: BaseManifest = await Utils.loadClassInstance(filepath, [app])
+                    const instance: BaseManifest = await Utils.loadManifest(filepath, [])
                     if (instance && instance && instance.items && Array.isArray(instance.items) && instance.items.length > 0) {
                         // Register dependencies if not already registered
-
+                        instance.attach(app)
+                        
                         // Determine Verify Function
                         const verify = this.authVerifyNone
                         for (let item of instance.items) {

@@ -5,10 +5,17 @@ import { IManifestItem } from "./imanifestitem"
 
 export class BaseManifest {
 
-    constructor(app: express.Application) {}
+    public constructor() {}
 
     appname: string = ''
     authStrategy: AuthStrategy = AuthStrategy.none
-    dependencies: string[] = [] // sqlserver, postgresdb, mongodb 
+    dependencies: string[] = [] // sqlserver, postgresdb, mongodb
+
     items: IManifestItem[] = []
+
+    attach(app: express.Application) {
+        // override in derived class
+        return
+    }
+
 }

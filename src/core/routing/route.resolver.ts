@@ -18,7 +18,7 @@ export class RouteResolver {
                 const files = await Utils.getFilesWithPhrase(this.path, 'manifest.')
                 const anyApp: any = app
                 for (let filepath of files) {
-                    const instance: BaseManifest = await Utils.loadClassInstance(filepath, 'BaseManifest', [app])
+                    const instance: BaseManifest = await Utils.loadClassInstance(filepath, [app])
                     if (instance && instance && instance.items && Array.isArray(instance.items) && instance.items.length > 0) {
                         // Register dependencies if not already registered
 

@@ -9,6 +9,7 @@ export class FieldwireSDK {
     private _globalUrl = `https://client-api.super.fieldwire.com`
     private _regionUrl = `https://client-api.us.fieldwire.com/api/v3/`
 
+    // #region Token
     private async _getJwtToken(): Promise<any> {
         return new Promise(async (resolve, reject) => {
             try {
@@ -45,8 +46,10 @@ export class FieldwireSDK {
             this._getJwtToken()
         }, 1000 * 60 * 50) // 40 minutes
     }
+    // #endregion
 
-    private async get(path: string): Promise<any> {
+    // #region Fetch
+    private async get(path: string, additionalHeaders?: any): Promise<any> {
         return new Promise(async (resolve, reject) => {
             try {
                 if (!this._jwtToken) {
@@ -54,14 +57,10 @@ export class FieldwireSDK {
                 }
 
                 const url = `${this._regionUrl}${path}`
+                const headers = this._buildHeaders(additionalHeaders)
                 const response = await fetch(url, {
                     method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                        'Fieldwire-Version': '2024-11-01',
-                        'Authorization': `Bearer ${this._jwtToken}`
-                    }
+                    headers: headers
                 })
 
                 if (response.status >= 300) {
@@ -75,6 +74,19 @@ export class FieldwireSDK {
             }
         });
     }
+    private _buildHeaders(additionalHeaders?: any) {
+        let output = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Fieldwire-Version': '2024-11-01',
+            'Authorization': `Bearer ${this._jwtToken}`
+        }
+        if (additionalHeaders) {
+            output = Object.assign(output, additionalHeaders)
+        }
+        return output
+    }
+    // #endregion
 
     // #region Accounts
     public async accountProjects(): Promise<AccountProjectSchema[]> {

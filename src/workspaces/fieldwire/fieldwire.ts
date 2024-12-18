@@ -44,7 +44,7 @@ export class FieldwireSDK {
         // So we don't need an interval, we need a timeout
         setTimeout(() => {
             this._getJwtToken()
-        }, 1000 * 60 * 50) // 40 minutes
+        }, 1000 * 60 * 55) // 40 minutes
     }
     // #endregion
 

@@ -1,0 +1,36 @@
+export interface ProjectTaskSchema {
+    "id": string
+    "creator_user_id": number
+    "last_editor_user_id": number
+    "project_id": string
+    "resolved_conflict": boolean
+    "created_at": Date
+    "updated_at": Date
+    "device_created_at": Date
+    "device_updated_at": Date
+    "deleted_at"?: Date
+    "floorplan_id": string
+    "is_local": boolean
+    "location_id"?: string
+    "owner_user_id": number
+    "pos_x": number
+    "pos_y": number
+    "pos_z": number
+    "priority": number
+    "sequence_number": number
+    "team_id": string
+    "status_id": string
+    "task_type_id": string
+    "latest_component_device_updated_at": Date
+    "is_private": boolean
+    "user_ids": number[]
+    "name": string
+    "cost_value"?: number
+    "man_power_value"?: number
+    "start_at"?: Date
+    "end_at"?: Date
+    "due_date"?: Date
+    "due_at"?: Date
+    "fixed_at"?: Date
+    "verified_at"?: Date
+}

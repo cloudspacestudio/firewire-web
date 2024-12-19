@@ -1,7 +1,9 @@
 import { AccountProjectSchema } from "./accounts/account.project.schema";
 import { AccountProjectStatSchema } from "./accounts/account.projectstat.schema";
 import { AccountProjectUserSchema } from "./accounts/account.project.user.schema";
-import { ProjectFloorplanSchema } from './projects/project.floorplan.schema'
+import { ProjectFloorplanSchema } from './projects/project.floorplan.schema';
+import { ProjectTaskSchema } from "./tasks/projecttask.schema";
+import { TaskEmailParams } from "./tasks/taskemail.params";
 
 const apiKey = process.env.fieldwire
 
@@ -95,9 +97,18 @@ export class FieldwireSDK {
                 if (response.status >= 300) {
                     return reject(new Error(`${response.status}: ${response.statusText}`))
                 }
-
-                const result = await response.json()
-                return resolve(result)
+                const contentType = response.headers.get('Content-Type') || ''
+                if (contentType.includes('application/json')) {
+                    try {
+                        const result = await response.json()
+                        return resolve(result)
+                    } catch (parseErr) {
+                        const justParseText = response.bodyUsed ? 'OK': await response.text()
+                        return resolve(justParseText)
+                    }
+                }
+                const resultText = await response.text()
+                return resolve(resultText)
             } catch (err) {
                 return reject(err)
             }
@@ -162,7 +173,39 @@ export class FieldwireSDK {
             }
         });
     }
+    // #endregion
 
+    // #region Tasks
+    public async projectTasks(projectId: string): Promise<ProjectTaskSchema[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/tasks`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async taskEmail(params: TaskEmailParams): Promise<ProjectTaskSchema[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const requestBody = {
+                    body: params.body,
+                    cc_sender: params.cc_sender,
+                    email: params.email,
+                    kind: params.kind,
+                    subject: params.subject
+                }
+                console.dir(requestBody)
+                const result = await this.post(`projects/${params.projectId}/tasks/${params.taskId}/email`, requestBody)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     // #endregion
 
     // #region AWS

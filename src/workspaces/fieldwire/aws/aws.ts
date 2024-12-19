@@ -12,9 +12,7 @@ export class FieldwireAWS {
                 return new Promise(async(resolve, reject) => {
                     try {
                         const result = await fieldwire.aws_post_tokens()
-                        return res.status(200).json({
-                            rows: result
-                        })
+                        return res.status(200).json(result)
                     } catch (err: Error|any) {
                         return res.status(500).json({
                             message: err && err.message ? err.message : err

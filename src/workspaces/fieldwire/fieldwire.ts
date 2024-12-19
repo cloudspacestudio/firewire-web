@@ -1,6 +1,7 @@
 import { AccountProjectSchema } from "./accounts/account.project.schema";
 import { AccountProjectStatSchema } from "./accounts/account.projectstat.schema";
 import { AccountProjectUserSchema } from "./accounts/account.project.user.schema";
+import { ProjectFloorplanSchema } from './projects/project.floorplan.schema'
 
 const apiKey = process.env.fieldwire
 
@@ -8,7 +9,7 @@ export class FieldwireSDK {
     private _jwtToken: any = null
     private _globalUrl = `https://client-api.super.fieldwire.com`
     private _regionUrl = `https://client-api.us.fieldwire.com/api/v3/`
-
+    
     // #region Token
     private async _getJwtToken(): Promise<any> {
         return new Promise(async (resolve, reject) => {
@@ -74,6 +75,34 @@ export class FieldwireSDK {
             }
         });
     }
+    private async post(path: string, body: any, additionalHeaders?: any): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (!this._jwtToken) {
+                    await this._getJwtToken()
+                }
+                if (!body) {
+                    body = {}
+                }
+                const url = `${this._regionUrl}${path}`
+                const headers = this._buildHeaders(additionalHeaders)
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: JSON.stringify(body),
+                    headers: headers
+                })
+
+                if (response.status >= 300) {
+                    return reject(new Error(`${response.status}: ${response.statusText}`))
+                }
+
+                const result = await response.json()
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     private _buildHeaders(additionalHeaders?: any) {
         let output = {
             'Content-Type': 'application/json',
@@ -109,7 +138,7 @@ export class FieldwireSDK {
             }
         });
     }
-    public async accountProjectUsers(projectId: string): Promise<any> {
+    public async accountProjectUsers(projectId: string): Promise<AccountProjectUserSchema> {
         return new Promise(async(resolve, reject) => {
             try {
                 const result = await this.get(`account/projects/${projectId}/users`)
@@ -122,7 +151,7 @@ export class FieldwireSDK {
     // #endregion
 
     // #region Projects
-    public async projectFloorplans(projectId: string, includeCurrentSheet: boolean): Promise<AccountProjectUserSchema[]> {
+    public async projectFloorplans(projectId: string, includeCurrentSheet: boolean): Promise<ProjectFloorplanSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
                 const suffix = includeCurrentSheet ? `?with_current_sheet=true`:``
@@ -136,6 +165,19 @@ export class FieldwireSDK {
 
     // #endregion
 
+    // #region AWS
+    // aws_post_tokens
+    public async aws_post_tokens(): Promise<any[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.post(`aws_post_tokens`, {})
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    // #endregion
 }
 
 /* Hierarchy of 

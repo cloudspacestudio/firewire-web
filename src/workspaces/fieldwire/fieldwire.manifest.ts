@@ -7,6 +7,7 @@ import { FieldwireSDK } from './fieldwire';
 
 import { FieldwireAccounts } from './accounts/accounts';
 import { FieldwireProjects } from './projects/projects';
+import { FieldwireAWS } from './aws/aws';
 
 export default class FieldwireManifest extends BaseManifest {
 
@@ -14,6 +15,7 @@ export default class FieldwireManifest extends BaseManifest {
         super()
         this.items.push(...FieldwireAccounts.manifestItems)
         this.items.push(...FieldwireProjects.manifestItems)
+        this.items.push(...FieldwireAWS.manifestItems)
     }
 
     appname: string = 'fieldwireapi'

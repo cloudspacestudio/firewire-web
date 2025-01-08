@@ -1,7 +1,7 @@
 import * as express from 'express'
 import { IPrincipleStorage } from '../iprinciplestorage'
 import { IPrincipal } from '../iprincipal'
-import { MsSqlServerDb } from '../../databases/mssqldb'
+import { MsSqlServerDb } from '../../datasources/mssqldb'
 import * as mssql from 'mssql'
 
 export class SqlAuthStorage implements IPrincipleStorage {

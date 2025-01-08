@@ -5,10 +5,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import 'dotenv/config'
 import { v4 } from 'uuid'
-import { ContentPostgresDb } from './databases/postgresdb'
+import { ContentPostgresDb } from './datasources/postgresdb'
 import { PoolConfig } from 'pg'
-import { ContentMongoDb, IMongoConfig } from './databases/mongodb'
-import { MsSqlServerDb, ISqlServerConfig } from './databases/mssqldb'
+import { ContentMongoDb, IMongoConfig } from './datasources/mongodb'
+import { MsSqlServerDb, ISqlServerConfig } from './datasources/mssqldb'
 import { RouteResolver } from './routing/route.resolver'
 
 export class Bootstrap {

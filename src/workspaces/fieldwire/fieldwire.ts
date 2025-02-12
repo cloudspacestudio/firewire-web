@@ -173,6 +173,86 @@ export class FieldwireSDK {
             }
         });
     }
+    public async project(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async folders(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/folders`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async sheets(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/sheets`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async statuses(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/statuses`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async locations(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/locations`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async teams(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/teams`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async tasks(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/tasks`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async attachments(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/attachments`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     // #endregion
 
     // #region Tasks

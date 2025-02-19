@@ -31,6 +31,39 @@ export class FieldwireProjects {
         },
         {
             method: 'get',
+            path: '/api/data/fieldwire/projects/:projectId/floorplans',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    res.setHeader('Content-Type', 'text/html')
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).send('Invalid Payload: Missing projectId parameter')
+                        }
+                        const result: any = await fieldwire.projectFloorplans(projectId, true)
+                        if (result) {
+                            let output = `<table>`
+                            result.forEach((row: any) => {
+                                output+=`<tr>`
+                                output+=`<td>${row.name}</td>`
+                                output+=`<td>${row.description}</td>`
+                                output+=`<td>${row.created_at}</td>`
+                                output+=`<td>${row.updated_at}</td>`
+                                output+=`</tr>`
+                            })
+                            output+=`</table>`
+                            return res.status(200).send(output)
+                        }
+                        return res.status(200).send('<table><tr><td>No Data Found</td></tr></table>')
+                    } catch (err: Error|any) {
+                        return res.status(500).send(err && err.message ? err.message : err)
+                    }
+                })
+            }
+        },
+        {
+            method: 'get',
             path: '/api/fieldwire/projects/:projectId/folders',
             fx: (req: express.Request, res: express.Response) => {
                 const fieldwire: FieldwireSDK = req.app.locals.fieldwire
@@ -168,6 +201,56 @@ export class FieldwireProjects {
                             })
                         }
                         const result = await fieldwire.tasks(projectId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/taskattributes',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        const result = await fieldwire.taskattributes(projectId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/taskcheckitems',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        const result = await fieldwire.taskcheckitems(projectId)
                         return res.status(200).json({
                             rows: result
                         })

@@ -243,6 +243,26 @@ export class FieldwireSDK {
             }
         });
     }
+    public async taskattributes(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/task_attributes`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async taskcheckitems(projectId: string): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/task_check_items`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     public async attachments(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {

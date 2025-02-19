@@ -8,7 +8,9 @@ import { FieldwireSDK } from './fieldwire';
 import { FieldwireAccounts } from './accounts/accounts';
 import { FieldwireProjects } from './projects/projects';
 import { FieldwireTasks } from './tasks/tasks';
+import { FieldwireDevices } from './devices/devices';
 import { FieldwireAWS } from './aws/aws';
+import { MsSqlServerDb } from '../../core/datasources/mssqldb';
 
 export default class FieldwireManifest extends BaseManifest {
 
@@ -18,6 +20,7 @@ export default class FieldwireManifest extends BaseManifest {
         this.items.push(...FieldwireProjects.manifestItems)
         this.items.push(...FieldwireAWS.manifestItems)
         this.items.push(...FieldwireTasks.manifestItems)
+        this.items.push(...FieldwireDevices.manifestItems)
     }
 
     appname: string = 'fieldwireapi'
@@ -27,6 +30,18 @@ export default class FieldwireManifest extends BaseManifest {
     attach(app: express.Application) {
         const fieldwireInstance = new FieldwireSDK()
         app.locals.fieldwire = fieldwireInstance
+
+        if (app.locals.sqlserver) {
+            setTimeout(async() => {
+                const sql: MsSqlServerDb = app.locals.sqlserver
+                try {
+                    const initResult = await sql.init()
+                    console.log(`CONNECTED TO SQL SERVER`)
+                } catch (err) {
+                    console.error(err)
+                }
+            })
+        }
 
     }
 

@@ -166,7 +166,9 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const suffix = includeCurrentSheet ? `?with_current_sheet=true`:``
-                const result = await this.get(`projects/${projectId}/floorplans${suffix}`)
+                const result = await this.get(`projects/${projectId}/floorplans${suffix}`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -186,7 +188,9 @@ export class FieldwireSDK {
     public async folders(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/folders`)
+                const result = await this.get(`projects/${projectId}/folders`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -196,7 +200,9 @@ export class FieldwireSDK {
     public async sheets(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/sheets`)
+                const result = await this.get(`projects/${projectId}/sheets`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -206,7 +212,9 @@ export class FieldwireSDK {
     public async statuses(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/statuses`)
+                const result = await this.get(`projects/${projectId}/statuses`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -216,7 +224,9 @@ export class FieldwireSDK {
     public async locations(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/locations`)
+                const result = await this.get(`projects/${projectId}/locations`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -226,7 +236,9 @@ export class FieldwireSDK {
     public async teams(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/teams`)
+                const result = await this.get(`projects/${projectId}/teams`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -236,7 +248,9 @@ export class FieldwireSDK {
     public async tasks(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/tasks`)
+                const result = await this.get(`projects/${projectId}/tasks`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -246,7 +260,9 @@ export class FieldwireSDK {
     public async taskattributes(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/task_attributes`)
+                const result = await this.get(`projects/${projectId}/task_attributes`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -256,7 +272,9 @@ export class FieldwireSDK {
     public async taskcheckitems(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/task_check_items`)
+                const result = await this.get(`projects/${projectId}/task_check_items`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -266,7 +284,9 @@ export class FieldwireSDK {
     public async attachments(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/attachments`)
+                const result = await this.get(`projects/${projectId}/attachments`, {
+                    "Fieldwire-Filter": "active"
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -306,6 +326,20 @@ export class FieldwireSDK {
             }
         });
     }
+    // #endregion
+
+    // #region Devices
+    public async devices(app: any): Promise<any[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = [...app.locals.devices]
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+
     // #endregion
 
     // #region AWS

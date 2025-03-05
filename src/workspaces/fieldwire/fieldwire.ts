@@ -4,6 +4,7 @@ import { AccountProjectUserSchema } from "./accounts/account.project.user.schema
 import { ProjectFloorplanSchema } from './projects/project.floorplan.schema';
 import { ProjectTaskSchema } from "./tasks/projecttask.schema";
 import { TaskEmailParams } from "./tasks/taskemail.params";
+import { CreateProjectTaskParams } from "./projects/project.task.params";
 
 const apiKey = process.env.fieldwire
 
@@ -249,6 +250,18 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/tasks`, {
+                    "Fieldwire-Filter": "active"
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async createTask(task: CreateProjectTaskParams): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.post(`projects/${task.project_id}/tasks`, task, {
                     "Fieldwire-Filter": "active"
                 })
                 return resolve(result)

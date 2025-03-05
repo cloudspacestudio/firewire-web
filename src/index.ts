@@ -41,6 +41,8 @@ bootstrapper.start().then(async(app: express.Application) => {
         deviceData.push(newDevice)
     })
     app.locals.devices = deviceData
+    const importData = await loadCSV('fa2.01.csv')
+    app.locals.importData = importData
     app.listen(port, () => {
         console.log(`Express server started on port ${port}`)
     })

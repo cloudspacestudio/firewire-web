@@ -4,7 +4,7 @@ import { AccountProjectUserSchema } from "./accounts/account.project.user.schema
 import { ProjectFloorplanSchema } from './projects/project.floorplan.schema';
 import { ProjectTaskSchema } from "./tasks/projecttask.schema";
 import { TaskEmailParams } from "./tasks/taskemail.params";
-import { CreateProjectTaskParams } from "./projects/project.task.params";
+import { CreateTaskParams } from "./tasks/project.task.params";
 
 const apiKey = process.env.fieldwire
 
@@ -89,6 +89,9 @@ export class FieldwireSDK {
                 }
                 const url = `${this._regionUrl}${path}`
                 const headers = this._buildHeaders(additionalHeaders)
+                console.log(`POST: ${url}`)
+                console.log(`HEADERS: ${JSON.stringify(headers)}`)
+                console.log(`BODY: ${JSON.stringify(body, null, 1)}`)
                 const response = await fetch(url, {
                     method: 'POST',
                     body: JSON.stringify(body),
@@ -258,18 +261,6 @@ export class FieldwireSDK {
             }
         });
     }
-    public async createTask(task: CreateProjectTaskParams): Promise<AccountProjectSchema> {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const result = await this.post(`projects/${task.project_id}/tasks`, task, {
-                    "Fieldwire-Filter": "active"
-                })
-                return resolve(result)
-            } catch (err) {
-                return reject(err)
-            }
-        });
-    }
     public async taskattributes(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
@@ -317,6 +308,18 @@ export class FieldwireSDK {
                 })
                 return resolve(result)
             } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async createTask(task: CreateTaskParams): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.post(`projects/${task.project_id}/tasks`, task, {
+                })
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
                 return reject(err)
             }
         });

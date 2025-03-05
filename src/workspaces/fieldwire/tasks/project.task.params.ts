@@ -1,5 +1,6 @@
-export interface CreateProjectTaskParams {
+export interface CreateTaskParams {
     project_id: string
+    creator_user_id: string
     owner_user_id: string
     floorplan_id: string
     team_id: string
@@ -8,6 +9,7 @@ export interface CreateProjectTaskParams {
     pos_x: number
     pos_y: number
     priority: number
+
     status_id: string
 
     task_type_id?: string

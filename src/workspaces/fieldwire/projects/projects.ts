@@ -234,7 +234,7 @@ export class FieldwireProjects {
                             name: req.body.name,
                             pos_x: req.body.pos_x,
                             pos_y: req.body.pos_y,
-                            priority: 2,
+                            priority: req.body.priority,
                             status_id: req.body.status_id
                         })
                         return res.status(200).json({

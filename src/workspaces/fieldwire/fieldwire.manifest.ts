@@ -10,7 +10,9 @@ import { FieldwireProjects } from './projects/projects';
 import { FieldwireTasks } from './tasks/tasks';
 import { FieldwireDevices } from './devices/devices';
 import { FieldwireAWS } from './aws/aws';
-import { MsSqlServerDb } from '../../core/datasources/mssqldb';
+import { MsSqlServerDb } from '../../core/databases/mssqldb';
+
+const sqlServerInitIntervalMs = 1000 * 60 * 10 // 10 minutes
 
 export default class FieldwireManifest extends BaseManifest {
 
@@ -28,21 +30,23 @@ export default class FieldwireManifest extends BaseManifest {
     dependencies: string[] = []
 
     attach(app: express.Application) {
-        const fieldwireInstance = new FieldwireSDK()
-        app.locals.fieldwire = fieldwireInstance
-
-        if (app.locals.sqlserver) {
-            setTimeout(async() => {
-                const sql: MsSqlServerDb = app.locals.sqlserver
-                try {
-                    const initResult = await sql.init()
-                    console.log(`CONNECTED TO SQL SERVER`)
-                } catch (err) {
-                    console.error(err)
-                }
-            })
-        }
-
+        return new Promise(async(resolve, reject) => {
+            const fieldwireInstance = new FieldwireSDK()
+            app.locals.fieldwire = fieldwireInstance
+    
+            if (app.locals.sqlserver) {
+                setInterval(async() => {
+                    const sql: MsSqlServerDb = app.locals.sqlserver
+                    try {
+                        const initResult = await sql.init()
+                        console.log(`miSSion.webserver: sqlserver: keepalive`)
+                    } catch (err) {
+                        console.error(err)
+                    }
+                }, sqlServerInitIntervalMs)
+            }
+            return resolve(true)
+        })
     }
 
     items: IManifestItem[] = []

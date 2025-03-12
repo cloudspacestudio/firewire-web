@@ -13,9 +13,9 @@ export class BaseManifest {
 
     items: IManifestItem[] = []
 
-    attach(app: express.Application) {
+    attach(app: express.Application): Promise<any> {
         // override in derived class
-        return
+        return Promise.resolve(true)
     }
 
 }

@@ -1,5 +1,7 @@
-import { promises as fs } from 'fs';
-import * as path from 'path';
+import { promises as fs } from 'fs'
+import * as path from 'path'
+import fssync from 'fs';
+import { parse } from 'csv-parse';
 
 export class Utils {
 
@@ -87,4 +89,33 @@ export class Utils {
         })
     }
 
+    /**
+     * Dynamically loads csv into an array of any from a filepath.
+     * @param filePath - The path to the module containing the class.
+     * @returns A promise resolving to an instance of any array of rows from the csv file.
+     */
+    static async loadCSV(filePath: string): Promise<any> {
+        const results: any[] = [];
+        const parser = fssync.createReadStream(filePath)
+            .pipe(parse({
+                delimiter: ',', // Adjust if your CSV uses a different delimiter
+                columns: true, // If your CSV has headers, this will use them as keys
+                skip_empty_lines: true
+            }));
+    
+        parser.on('data', (data: any) => {
+            results.push(data);
+        });
+        parser.on('error', (err: any) => {
+            console.error('Error reading CSV:', err);
+        });
+        await new Promise((resolve: any) => {
+            parser.on('end', () => {
+                resolve();
+            });
+        });
+    
+        return results;
+    }
+    
 }

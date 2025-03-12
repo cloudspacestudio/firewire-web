@@ -332,8 +332,16 @@ export class FieldwireSDK {
     public async devices(app: any): Promise<any[]> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = [...app.locals.devices]
-                return resolve(result)
+                if (app.locals && app.locals.devices) {
+                    return resolve([...app.locals.devices])
+                }
+                const sql = app.locals.sqlserver
+                const result = await sql.query(`SELECT * FROM devices`)
+                if (!result || !result.recordset) {
+                    throw new Error(`No devices found`)
+                }
+                app.locals.devices = [...result.recordset]
+                return resolve([...app.locals.devices])
             } catch (err) {
                 return reject(err)
             }

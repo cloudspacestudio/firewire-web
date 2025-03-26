@@ -352,9 +352,9 @@ export class FieldwireSDK {
                     return resolve([...app.locals.devices])
                 }
                 const sql = app.locals.sqlserver
-                const result = await sql.query(`SELECT * FROM devices`)
+                const result = await sql.query(`SELECT * FROM materials`)
                 if (!result || !result.recordset) {
-                    throw new Error(`No devices found`)
+                    throw new Error(`No materials found`)
                 }
                 app.locals.devices = [...result.recordset]
                 return resolve([...app.locals.devices])

@@ -153,4 +153,42 @@ export class Utils {
             }, ms)
         })
     }
+
+    static convertToInches(input: string): number | null {
+        let sign = 1;
+        let feet = 0;
+        let inches = 0;
+        let fraction = "";
+        let fractionValue = 0;
+    
+        // Check for negative sign
+        if (input.startsWith("-")) {
+            sign = -1;
+            input = input.substring(1);
+        }
+    
+        // Extract feet and inches
+        const feetMatch = input.match(/^([0-9]+)'/);
+        if (feetMatch) feet = parseInt(feetMatch[1], 10);
+    
+        const inchesMatch = input.match(/-([0-9]+)/);
+        if (inchesMatch) inches = parseInt(inchesMatch[1], 10);
+    
+        // Extract fraction (if exists)
+        const fractionMatch = input.match(/ ([0-9]+\/[0-9]+)"/);
+        if (fractionMatch && fractionMatch[1]) {
+            fraction = fractionMatch[1];
+            const [numerator, denominator] = fraction.split("/").map(Number);
+            if (!isNaN(numerator) && !isNaN(denominator) && denominator !== 0) {
+                fractionValue = numerator / denominator;
+            }
+        }
+    
+        // Calculate total inches
+        const result = sign * ((feet * 12) + inches + fractionValue);
+    
+        // Validate result
+        return isNaN(result) ? null : result;
+    }
+
 }

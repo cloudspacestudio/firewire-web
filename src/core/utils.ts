@@ -2,6 +2,7 @@ import { promises as fs } from 'fs'
 import * as path from 'path'
 import fssync from 'fs';
 import { parse } from 'csv-parse';
+import { v4 as uuidv4 } from 'uuid'
 
 export class Utils {
 
@@ -24,6 +25,18 @@ export class Utils {
                 throw error;
             }
         })
+    }
+    static replaceAllInstances(inputString: string, char: string, replacement: string): string {
+        // Escape the character if it's a special regex character
+        const escapedChar = char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      
+        // Create a regex to match all instances of the character
+        const regex = new RegExp(escapedChar, 'g');
+      
+        // Replace all instances of the character with the replacement string
+        const resultString = inputString.replace(regex, replacement);
+      
+        return resultString;
     }
 
     /**
@@ -118,6 +131,105 @@ export class Utils {
         return results;
     }
     
+    /*
+        Asynchronously write data to a file on node fs and await closure before resolving
+    */
+    static writeFile(targetFilePath: string, data: any): Promise<boolean> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                    const writeStream = await fs.open(targetFilePath, 'w');
+                    const result = JSON.stringify(data)
+                    try {
+                        await writeStream.write(result);
+                    } catch (innerErr) {
+                        console.error(innerErr)
+                    } finally {
+                        await writeStream.close();
+                        setTimeout(() => {
+                            return resolve(true)
+                        }, 1)
+    
+                    }
+            } catch (err) {
+                return reject(err)
+            }
+        })
+    }
+    
+    // simple funtion to return all files including sub directories in a given path
+    static getAllFilePaths(directory: string): Promise<string[]> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                const filePaths: string[] = [];
+
+                async function traverse(dir: string) {
+                    const entries = await fs.readdir(dir, { withFileTypes: true });
+            
+                    for (const entry of entries) {
+                        const fullPath = path.join(dir, entry.name);
+                        if (entry.isDirectory()) {
+                            // Recursively traverse subdirectories
+                            await traverse(fullPath);
+                        } else if (entry.isFile()) {
+                            // Add file paths to the result array
+                            filePaths.push(fullPath);
+                        }
+                    }
+                }
+            
+                await traverse(directory);
+                return resolve(filePaths);
+            } catch (err) {
+                return reject(err)
+            }
+        })
+    }
+
+    /*
+        SYNCHRONOUS
+        Ensures that a subdirectory exists within a root directory.
+        If the subdirectory does not exist, it creates it.
+    
+        @param rootDirectory - The root directory path.
+        @param subDirectoryName - The name of the subdirectory to check or create.
+    */
+    static ensureSubdirectoryExists(rootDirectory: string, subDirectoryName: string): Promise<boolean> {
+        return new Promise(async(resolve, reject) => {
+            // Resolve the full path to the subdirectory
+            const subDirectoryPath = path.join(rootDirectory, subDirectoryName);
+
+            try {
+                // Check if the path exists and is a directory
+                if (!fssync.existsSync(subDirectoryPath)) {
+                    fssync.mkdirSync(subDirectoryPath, { recursive: true }); // Create the directory if it doesn't exist
+                    console.log(`Directory created: ${subDirectoryPath}`);
+                    setTimeout(() => {
+                        return resolve(true)
+                    },10)
+                } else if (!fssync.lstatSync(subDirectoryPath).isDirectory()) {
+                    throw new Error(`The path ${subDirectoryPath} exists but is not a directory.`);
+                } else {
+                    console.log(`Directory already exists: ${subDirectoryPath}`);
+                    setTimeout(() => {
+                        return resolve(true)
+                    },10)
+                }
+            } catch (error: any) {
+                console.error(`Failed to ensure directory exists: ${error.message}`);
+                return reject(false)
+            }
+        })
+    }
+    
+    // Given the input string, remove all instances of target array with empty string
+    static emptyAllInstances(input: string, targets: string[]): string {
+        let output = input
+        targets.forEach((item) => {
+            output = output.split(item).join('');
+        })
+        return output
+    }
+
     static getTeamIdFromName(projectId: string, name: string): string {
         if (projectId==='4b9a65d3-4ce4-4308-b93e-4513ff98fc72') {
             // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
@@ -191,4 +303,88 @@ export class Utils {
         return isNaN(result) ? null : result;
     }
 
+    static getRandomIntBetween(min: number, max: number): number {
+        const lower = Math.ceil(min);
+        const upper = Math.floor(max);
+        return Math.floor(Math.random() * (upper - lower + 1)) + lower;
+    }
+
+    static newGuid() {
+        const rand = `${process.pid}-${process.ppid}-${Date.now()}`
+        return uuidv4()
+    }
+
+    static formatDateTimeForSqlServer(date: Date): string | null {
+        if (!date) {
+            return null
+        }
+        const pad = (num: number, size: number = 2) => num.toString().padStart(size, '0');
+      
+        const year = date.getFullYear();
+        const month = pad(date.getMonth() + 1); // Months are 0-based
+        const day = pad(date.getDate());
+        const hours = pad(date.getHours());
+        const minutes = pad(date.getMinutes());
+        const seconds = pad(date.getSeconds());
+        const milliseconds = pad(date.getMilliseconds(), 3);
+      
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+    }
+
+    static formatDateForSqlServer(date: Date): string | null{
+        if (!date) {
+            return null
+        }
+        const pad = (num: number) => num.toString().padStart(2, '0');
+      
+        const year = date.getFullYear();
+        const month = pad(date.getMonth() + 1); // Months are 0-based
+        const day = pad(date.getDate());
+      
+        return `${year}-${month}-${day}`;
+    }
+
+    static toBit(input: any) {
+        if (!input) {
+            return 0
+        }
+        const test = input.toString()
+        if (!test || test.length <= 0) {
+            return 0
+        }
+        if (test.trim().length <= 0) {
+            return 0
+        }
+        switch(test.trim().toLowerCase()) {
+            case 'true':
+            case 'yes':
+            case '1':
+            case 'y':
+            case 'on':
+                return 1
+            default:
+                return 0
+        }
+    }
+
+    static safeString(input: any): string|null {
+        if (!input) {
+            return null
+        }
+        input = Utils.replaceAllInstances(input, "'", '`')
+        input = Utils.replaceAllInstances(input, '"', '”')
+        return input
+    }
+
+    static toISODate(input: string) {
+        if (!input) {
+            return null
+        }
+        try {
+            const theDate = new Date(input)
+            return `${theDate.getFullYear()}-${theDate.getMonth()+1}-${theDate.getDate()}`
+        } catch {
+            return null
+        }
+    }
 }

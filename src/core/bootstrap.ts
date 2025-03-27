@@ -10,7 +10,7 @@ import { RouteResolver } from './routing/route.resolver'
 
 export class Bootstrap {
 
-    start(): Promise<express.Application> {
+    start(routeless: boolean = false): Promise<express.Application> {
         return new Promise(async(resolve, reject) => {
             console.log(`miSSion.webserver: starting`)
             const app = express()
@@ -100,37 +100,38 @@ export class Bootstrap {
                 }
                 
                 // Read manifest and create endpoints
-                console.log(`miSSion.webserver: initializing workspace routes`)
-                const resolver: RouteResolver = new RouteResolver(path.join(process.cwd(), 'src', 'workspaces'))
-                console.log(`miSSion.webserver: attaching routes to webserver`)
-                await resolver.attach(app)
-
-                // Check that at least 1 route was registered with functionality
-                if (resolver.routeCount <= 0) {
-                    // No routes were attached
-                    const failedApp = this.setServerIntoFailedState({
-                        code: 400,
-                        success: false,
-                        message: `No routes were identified in this system`
+                if (!routeless) {
+                    console.log(`miSSion.webserver: initializing workspace routes`)
+                    const resolver: RouteResolver = new RouteResolver(path.join(process.cwd(), 'src', 'workspaces'))
+                    console.log(`miSSion.webserver: attaching routes to webserver`)
+                    await resolver.attach(app)
+    
+                    // Check that at least 1 route was registered with functionality
+                    if (resolver.routeCount <= 0) {
+                        // No routes were attached
+                        const failedApp = this.setServerIntoFailedState({
+                            code: 400,
+                            success: false,
+                            message: `No routes were identified in this system`
+                        })
+                        return resolve(failedApp)
+                    }    
+                    // Any requests to API that were not routed return JSON 404
+                    app.all('/api/*', (req, res) => {
+                        res.sendStatus(404).json()
                     })
-                    return resolve(failedApp)
+                    
+                    // All get requests not handled return HTML 404
+                    app.get('**', (req, res) => {
+                        // Send index.html for SPA
+                        res.sendStatus(404)
+                    })
+                    
+                    // Any requests not otherwise handled return generic 404
+                    app.all('**', (req, res) => {
+                        res.sendStatus(404)
+                    })
                 }
-                
-                // Any requests to API that were not routed return JSON 404
-                app.all('/api/*', (req, res) => {
-                    res.sendStatus(404).json()
-                })
-                
-                // All get requests not handled return HTML 404
-                app.get('**', (req, res) => {
-                    // Send index.html for SPA
-                    res.sendStatus(404)
-                })
-                
-                // Any requests not otherwise handled return generic 404
-                app.all('**', (req, res) => {
-                    res.sendStatus(404)
-                })
 
                 // Check for any post registration preconditions before starting server listener
                 const postStartResult = await this.postStart(app)

@@ -214,7 +214,7 @@ export class EddyImporter {
             output.push(`<tr>`)
             keys.forEach((key: string) => {
                 const value = dateKeys.indexOf(key) >= 0 ? Utils.toISODate(record[key]):record[key]
-                output.push(`<td>${value}</td>`)
+                output.push(`<td>${value||''}</td>`)
             })
             output.push(`</tr>`)
         })

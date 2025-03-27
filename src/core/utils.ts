@@ -382,6 +382,10 @@ export class Utils {
         }
         try {
             const theDate = new Date(input)
+            const today = new Date()
+            if (theDate.getFullYear() < today.getFullYear()) {
+                return null
+            }
             return `${theDate.getFullYear()}-${theDate.getMonth()+1}-${theDate.getDate()}`
         } catch {
             return null

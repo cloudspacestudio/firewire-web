@@ -7,7 +7,14 @@ import { Utils } from '../../../core/utils'
 export class FieldwireTasks {
 
     static manifestItems = [
-        {
+        FieldwireTasks.getProjectTasks(),
+        FieldwireTasks.createProjectTask(),
+        FieldwireTasks.importProjectTasks(),
+        FieldwireTasks.createProjectTask()
+    ]
+
+    static getProjectTasks() {
+        return {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/tasks',
             fx: (req: express.Request, res: express.Response) => {
@@ -31,8 +38,11 @@ export class FieldwireTasks {
                     }
                 })
             }
-        },
-        {
+        }
+    }
+
+    static createProjectTask() {
+        return {
             method: 'post',
             path: '/api/fieldwire/projects/:projectId/tasks',
             fx: (req: express.Request, res: express.Response) => {
@@ -80,8 +90,11 @@ export class FieldwireTasks {
                     }
                 })
             }
-        },
-        {
+        }        
+    }
+
+    static importProjectTasks() {
+        return {
             method: 'post',
             path: '/api/fieldwire/projects/:projectId/tasks/import',
             fx: (req: express.Request, res: express.Response) => {
@@ -143,8 +156,11 @@ export class FieldwireTasks {
                     }
                 })
             }
-        },
-        {
+        }
+    }
+
+    static createTaskEmail() {
+        return {
             method: 'post',
             path: '/api/fieldwire/projects/:projectId/tasks/:taskId/email',
             fx: (req: express.Request, res: express.Response) => {
@@ -184,6 +200,5 @@ export class FieldwireTasks {
                 })
             }
         }
-    ]
-
+    }
 }

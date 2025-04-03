@@ -224,6 +224,7 @@ export class EddyImporter {
         output.push(`</html>`)
         return output.join('\n')
     }
+    
     private getRecords(app: express.Application): Promise<ProductResponse[]> {
         return new Promise(async(resolve, reject) => {
             try {

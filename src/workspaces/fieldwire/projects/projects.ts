@@ -4,6 +4,7 @@ import { FieldwireSDK } from '../fieldwire'
 export class FieldwireProjects {
 
     static manifestItems = [
+        // Get Floorplans
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/floorplans',
@@ -29,6 +30,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get as HTML Table
         {
             method: 'get',
             path: '/api/data/fieldwire/projects/:projectId/floorplans',
@@ -62,6 +64,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Folders
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/folders',
@@ -87,6 +90,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Sheets
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/sheets',
@@ -112,6 +116,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Statuses (Priority 1, Not Started, Completed etc.)
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/statuses',
@@ -137,6 +142,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Project Locations (Office 1, Lab 2 etc.)
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/locations',
@@ -162,6 +168,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Project Teams (Categories e.g. Speaker Strobe, Fire Alarm Panel etc.)
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/teams',
@@ -187,6 +194,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Project Tasks
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/tasks',
@@ -212,6 +220,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Project Task Attributes
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/taskattributes',
@@ -237,6 +246,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Task Check Items
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/taskcheckitems',
@@ -262,6 +272,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Project Attachments
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId/attachments',
@@ -287,6 +298,7 @@ export class FieldwireProjects {
                 })
             }
         },
+        // Get Project Detail
         {
             method: 'get',
             path: '/api/fieldwire/projects/:projectId',

@@ -13,6 +13,13 @@ export class FieldwireSDK {
     private _globalUrl = `https://client-api.super.fieldwire.com`
     private _regionUrl = `https://client-api.us.fieldwire.com/api/v3/`
     
+    static editableProjects = [
+        '85285faa-a9dd-4c75-9f37-8a98faf4d09a', // Sample 01
+        'd0105078-da46-4a42-809f-b015b0cf87c8', // Test
+        '4b9a65d3-4ce4-4308-b93e-4513ff98fc72', // Block Setup 101
+        '39bd5799-295a-41e4-aaea-839f78393de2', // Fieldwire Business Oklahoma Project
+    ]
+
     // #region Token
     private async _getJwtToken(): Promise<any> {
         return new Promise(async (resolve, reject) => {
@@ -315,6 +322,9 @@ export class FieldwireSDK {
     public async createTask(task: CreateTaskParams): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {
+                if (FieldwireSDK.editableProjects.indexOf(task.project_id) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${task.project_id}`)
+                }
                 const result = await this.post(`projects/${task.project_id}/tasks`, task, {
                 })
                 return resolve(result)
@@ -336,6 +346,18 @@ export class FieldwireSDK {
                 }
                 console.dir(requestBody)
                 const result = await this.post(`projects/${params.projectId}/tasks/${params.taskId}/email`, requestBody)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async projectTaskTypeAttrinutes(projectId: string): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/task_type_attributes`, {
+                    'Fieldwire-Filter': 'active'
+                })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -379,6 +401,45 @@ export class FieldwireSDK {
         });
     }
     // #endregion
+
+    // #region Utils
+
+    // Get Category Info for Project and Row combination
+    static getTeamIdFromName(projectId: string, name: string): string {
+        // projectId: Sample 01: 85285faa-a9dd-4c75-9f37-8a98faf4d09a
+        // projectId: Test: d0105078-da46-4a42-809f-b015b0cf87c8
+        // projectId: Block Setup 101: 4b9a65d3-4ce4-4308-b93e-4513ff98fc72
+        // projectId: Fieldwire Business Oklahoma Project: 39bd5799-295a-41e4-aaea-839f78393de2
+
+        if (projectId==='4b9a65d3-4ce4-4308-b93e-4513ff98fc72') {
+            // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
+            // pull station 970973b7-dca7-4302-8d07-38a97f7efe2c
+            // VESDA detector 77558dd3-cd37-43f5-8d57-dd10289ce532
+            // speaker strobe ceiling 3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a
+            const defaultTeam = '970973b7-dca7-4302-8d07-38a97f7efe2c' // pull station 970973b7-dca7-4302-8d07-38a97f7efe2c
+            if (!name) {
+                return defaultTeam
+            }
+            if (name.toLowerCase().indexOf('cd')) {
+                return '9219b7f1-85a3-42be-8df0-f460334c04e1' // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
+            }
+            if (name.toLowerCase().indexOf('heat')) {
+                return '77558dd3-cd37-43f5-8d57-dd10289ce532' // VESDA detector 77558dd3-cd37-43f5-8d57-dd10289ce532
+            }
+            if (name.toLowerCase().indexOf('wp sv')) {
+                return '3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a' // speaker strobe ceiling 3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a
+            }
+            switch(name.toLowerCase()) {
+                default:
+                    return defaultTeam
+            }
+        }
+
+        throw new Error(`No maps for project ${projectId}`)
+    }
+
+    // #endregion
+
 }
 
 /* Hierarchy of 

@@ -230,34 +230,6 @@ export class Utils {
         return output
     }
 
-    static getTeamIdFromName(projectId: string, name: string): string {
-        if (projectId==='4b9a65d3-4ce4-4308-b93e-4513ff98fc72') {
-            // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
-            // pull station 970973b7-dca7-4302-8d07-38a97f7efe2c
-            // VESDA detector 77558dd3-cd37-43f5-8d57-dd10289ce532
-            // speaker strobe ceiling 3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a
-            const defaultTeam = '970973b7-dca7-4302-8d07-38a97f7efe2c' // pull station 970973b7-dca7-4302-8d07-38a97f7efe2c
-            if (!name) {
-                return defaultTeam
-            }
-            if (name.toLowerCase().indexOf('cd')) {
-                return '9219b7f1-85a3-42be-8df0-f460334c04e1' // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
-            }
-            if (name.toLowerCase().indexOf('heat')) {
-                return '77558dd3-cd37-43f5-8d57-dd10289ce532' // VESDA detector 77558dd3-cd37-43f5-8d57-dd10289ce532
-            }
-            if (name.toLowerCase().indexOf('wp sv')) {
-                return '3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a' // speaker strobe ceiling 3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a
-            }
-            switch(name.toLowerCase()) {
-                default:
-                    return defaultTeam
-            }
-        }
-
-        throw new Error(`No maps for project ${projectId}`)
-    }
-
     static sleep(ms: number): Promise<any> {
         return new Promise((resolve) => {
             setTimeout(() => {

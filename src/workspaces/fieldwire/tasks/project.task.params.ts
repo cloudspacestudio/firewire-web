@@ -10,7 +10,7 @@ export interface CreateTaskParams {
     pos_y: number
     priority: number
 
-    status_id: string
+    status_id?: string
 
     task_type_id?: string
     location_id?: string

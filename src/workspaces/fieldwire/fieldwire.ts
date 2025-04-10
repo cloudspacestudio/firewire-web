@@ -125,6 +125,35 @@ export class FieldwireSDK {
             }
         });
     }
+    private async delete(path: string, additionalHeaders?: any): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (!this._jwtToken) {
+                    await this._getJwtToken()
+                }
+
+                const url = `${this._regionUrl}${path}`
+                const headers = this._buildHeaders(additionalHeaders)
+                //console.log(`DELETE: ${url}`)
+                const response = await fetch(url, {
+                    method: 'DELETE',
+                    headers: headers
+                })
+                //console.log(`DELETE: Status ${response.status}`)
+
+                if (response.status >= 300) {
+                    return reject(new Error(`${response.status}: ${response.statusText}`))
+                }
+
+                return resolve({
+                    status: response.status,
+                    text: response.text
+                })
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     private _buildHeaders(additionalHeaders?: any) {
         let output = {
             'Content-Type': 'application/json',
@@ -360,6 +389,35 @@ export class FieldwireSDK {
                 })
                 return resolve(result)
             } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async deleteAllTasks(projectId: string, beSureYouKnowWhatYoureDoing: boolean): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (!beSureYouKnowWhatYoureDoing) {
+                    throw new Error(`You don't know what you're doing`)
+                }
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const tasks = await this.projectTasks(projectId)
+                if (!tasks || tasks.length <= 0) {
+                    throw new Error(`No tasks found to delete in project ${projectId}`)
+                }
+                let deletedCount = 0
+                for (let i = 0; i < tasks.length&&i < 50; i++) { // 50 is the default task page size
+                    const task = tasks[i]
+                    const result = await this.delete(`projects/${projectId}/tasks/${task.id}`, {
+                    })
+                    deletedCount++
+                }
+                return resolve({
+                    message: `Successfully deleted ${deletedCount} records`
+                })
+            } catch (err) {
+                console.error(err)
                 return reject(err)
             }
         });

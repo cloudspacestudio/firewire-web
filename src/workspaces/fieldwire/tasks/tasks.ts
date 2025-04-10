@@ -3,6 +3,7 @@ import { FieldwireSDK } from '../fieldwire'
 import { TaskEmailParams } from './taskemail.params'
 import { CreateTaskParams } from './project.task.params'
 import { Utils } from '../../../core/utils'
+import { ImportItem } from './importitem.schemas'
 
 export class FieldwireTasks {
 
@@ -11,7 +12,8 @@ export class FieldwireTasks {
         FieldwireTasks.getProjectTaskTypeAttributes(),
         FieldwireTasks.createProjectTask(),
         FieldwireTasks.importProjectTasks(),
-        FieldwireTasks.createProjectTask()
+        FieldwireTasks.createProjectTask(),
+        FieldwireTasks.deleteTasks()
     ]
 
     static getProjectTasks() {
@@ -29,13 +31,15 @@ export class FieldwireTasks {
                             })
                         }
                         const result = await fieldwire.projectTasks(projectId)
-                        return res.status(200).json({
+                        res.status(200).json({
                             rows: result
                         })
+                        return resolve(true)
                     } catch (err: Error|any) {
-                        return res.status(500).json({
+                        res.status(500).json({
                             message: err && err.message ? err.message : err
                         })
+                        return resolve(err)
                     }
                 })
             }
@@ -57,13 +61,15 @@ export class FieldwireTasks {
                             })
                         }
                         const result = await fieldwire.projectTaskTypeAttrinutes(projectId)
-                        return res.status(200).json({
+                        res.status(200).json({
                             rows: result
                         })
+                        return resolve(true)
                     } catch (err: Error|any) {
-                        return res.status(500).json({
+                        res.status(500).json({
                             message: err && err.message ? err.message : err
                         })
+                        return resolve(err)
                     }
                 })
             }
@@ -108,14 +114,16 @@ export class FieldwireTasks {
                         if (req.body.fixed_at) task.fixed_at=req.body.fixed_at
                         if (req.body.verified_at) task.verified_at=req.body.verified_at
                         const result = await fieldwire.createTask(task)
-                        return res.status(200).json({
+                        res.status(200).json({
                             result
                         })
+                        return resolve(true)
                     } catch (err: Error|any) {
                         console.error(err)
-                        return res.status(500).json({
+                        res.status(500).json({
                             message: err && err.message ? err.message : err
                         })
+                        return resolve(err)
                     }
                 })
             }
@@ -143,19 +151,19 @@ export class FieldwireTasks {
                         }
                         const user_id = req.body.owner_user_id
                         const floorplan_id = req.body.floorplan_id
-                        const batchId = ''
+                        const batchId = req.body.batch_id
                         const locationId = req.body.location_id
 
                         // pull importData from Sql Server by projectId and batchId
 
 
-                        //console.dir(req.app.locals.importData)
+                        // console.dir(req.app.locals.importData)
                         if (!req.app.locals.importData) {
                             return res.status(400).json({
                                 message: `Invalid Import CSV`
                             })
                         }
-                        const rows = req.app.locals.importData
+                        const rows: ImportItem[] = req.app.locals.importData
                         let importedCount = 0
                         const output: any[] = []
                         for(let i = 0; i < rows.length; i++) {
@@ -170,7 +178,7 @@ export class FieldwireTasks {
                                 team_id: FieldwireSDK.getTeamIdFromName(projectId, row['Visibility']),
                                 is_local: floorplan_id?true:false,
                                 // Name Sample: 0020020161 - Power Monitor Shunt (CT1)
-                                name: `${row['Address']} - ${row['Name']} (${'CT1'})`, // TODO: Category Handle
+                                name: `${row['Address']} - ${row['Visibility']} (${'CT1'})`, // TODO: Category Handle
                                 pos_x: req.body.pos_x,
                                 pos_y: req.body.pos_y,
                                 priority: req.body.priority,
@@ -191,9 +199,44 @@ export class FieldwireTasks {
                         
                     } catch (err: Error|any) {
                         console.error(err)
-                        return res.status(500).json({
+                        res.status(500).json({
                             message: err && err.message ? err.message : err
                         })
+                        return resolve(err)
+                    }
+                })
+            }
+        }
+    }
+
+    static deleteTasks() {
+        return {
+            method: 'delete',
+            path: '/api/fieldwire/projects/:projectId/tasks/deleteall',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                            res.status(404).json({
+                                message: `Invalid Project Id: ${projectId} is not an editable project id`
+                            })
+                        }
+
+                        const result = await fieldwire.deleteAllTasks(projectId, true)
+                        res.status(200).json(result)
+                        return resolve(true)
+                    } catch (err: Error|any) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                        return resolve(err)
                     }
                 })
             }
@@ -230,13 +273,15 @@ export class FieldwireTasks {
                             kind: req.body.kind
                         }
                         const result = await fieldwire.taskEmail(params)
-                        return res.status(201).json({
+                        res.status(201).json({
                             message: result
                         })
+                        return resolve(true)
                     } catch (err: Error|any) {
-                        return res.status(500).json({
+                        res.status(500).json({
                             message: err && err.message ? err.message : err
                         })
+                        return resolve(err)
                     }
                 })
             }

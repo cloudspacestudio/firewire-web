@@ -1,12 +1,38 @@
-import { AccountProjectSchema } from "./accounts/account.project.schema";
-import { AccountProjectStatSchema } from "./accounts/account.projectstat.schema";
-import { AccountProjectUserSchema } from "./accounts/account.project.user.schema";
-import { ProjectFloorplanSchema } from './projects/project.floorplan.schema';
-import { ProjectTaskSchema } from "./tasks/projecttask.schema";
+import * as express from 'express'
+import { AccountProjectSchema } from "./schemas/account.project.schema";
+import { AccountProjectStatSchema } from "./schemas/account.projectstat.schema";
+import { AccountProjectUserSchema } from "./schemas/account.project.user.schema";
+import { ProjectFloorplanSchema } from './schemas/project.floorplan.schema';
+import { ProjectTaskSchema } from "./schemas/projecttask.schema";
 import { TaskEmailParams } from "./tasks/taskemail.params";
 import { CreateTaskParams } from "./tasks/project.task.params";
+import { ResolverParams } from "./tasks/resolvers/resolver.params";
+import { DeviceResolver } from './tasks/resolvers/device.resolver'
+import { Utils } from '../../core/utils'
+
+import { ImportItem } from './schemas/importitem.schemas'
+import { Device } from './repository/device';
+import { Material } from './repository/material';
+import { Category } from './repository/category';
+import { Vendor } from './repository/vendor';
+import { DeviceMaterial } from './repository/devicematerial';
+import { SqlDb } from './repository/sqldb';
+import { TestDevice } from './repository/testdevice';
+import { ResolvedDevice } from './schemas/resolvedDevice';
+import { TeamSchema } from './schemas/team.schema';
+import { TaskTypeAttributeSchema } from './schemas/tasktypeattribute';
+import { AttributeResolver } from './tasks/resolvers/attribute.resolver';
+import { MaterialAttribute } from './repository/materialattribute';
+import { TaskAttributeSchema } from './schemas/taskattribute.schema';
+import { AddressResolver } from './tasks/resolvers/address.resolver';
+import { TaskNameResolver } from './tasks/resolvers/taskname.resolver';
+import { PositionResolver } from './tasks/resolvers/position.resolver';
+import { SubTaskResolver } from './tasks/resolvers/subtask.resolver';
+import { MaterialSubTask } from './repository/materialsubtask';
+import { TaskRelationSchema } from './schemas/taskrelation.schema';
 
 const apiKey = process.env.fieldwire
+const defaultMaterialLabor = 2
 
 export class FieldwireSDK {
     private _jwtToken: any = null
@@ -273,12 +299,36 @@ export class FieldwireSDK {
             }
         });
     }
-    public async teams(projectId: string): Promise<AccountProjectSchema> {
+    public async teams(projectId: string): Promise<TeamSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/teams`, {
                     "Fieldwire-Filter": "active"
                 })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async createTeam(input: TeamSchema): Promise<TeamSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(input.project_id) <0) {
+                    throw new Error(`Attempted to modify project ${input.project_id} which is not an editable project`)
+                }
+                const safeHandle = input.handle && input.handle.length > 2 ?
+                    input.handle.substring(0, 2):input.handle
+                const result = await this.post(`projects/${input.project_id}/teams`, {
+                    project_id: input.project_id,
+                    handle: safeHandle,
+                    name: input.name
+                }, {})
+                if (result.handle!==safeHandle) {
+                    // handle was changed because was not unique in project
+                    // update database record to match fieldwire handle
+                    // TODO: UPDATE categories SET handle=result.handle WHERE categoryId='result.id'
+                }
                 return resolve(result)
             } catch (err) {
                 return reject(err)
@@ -363,6 +413,34 @@ export class FieldwireSDK {
             }
         });
     }
+    public async createTaskAttribute(input: TaskAttributeSchema): Promise<TaskAttributeSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(input.project_id) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${input.project_id}`)
+                }
+                const result = await this.post(`projects/${input.project_id}/tasks/${input.task_id}/task_attributes`, input, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });
+    }
+    public async createTaskRelation(input: TaskRelationSchema): Promise<TaskRelationSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(input.project_id) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${input.project_id}`)
+                }
+                const result = await this.post(`projects/${input.project_id}/task_relations`, input, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });        
+    }
     public async taskEmail(params: TaskEmailParams): Promise<ProjectTaskSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
@@ -381,7 +459,7 @@ export class FieldwireSDK {
             }
         });
     }
-    public async projectTaskTypeAttrinutes(projectId: string): Promise<any> {
+    public async projectTaskTypeAttributes(projectId: string): Promise<TaskTypeAttributeSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/task_type_attributes`, {
@@ -393,11 +471,33 @@ export class FieldwireSDK {
             }
         });
     }
-    public async deleteAllTasks(projectId: string, beSureYouKnowWhatYoureDoing: boolean): Promise<any> {
+    public async createProjectTaskTypeAttribute(input: TaskTypeAttributeSchema): Promise<TaskTypeAttributeSchema> {
         return new Promise(async (resolve, reject) => {
             try {
-                if (!beSureYouKnowWhatYoureDoing) {
-                    throw new Error(`You don't know what you're doing`)
+                if (FieldwireSDK.editableProjects.indexOf(input.project_id) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${input.project_id}`)
+                }
+                const result = await this.post(`projects/${input.project_id}/task_types/${input.task_type_id}/task_type_attributes`, {
+                    project_id: input.project_id,
+                    task_type_id: input.task_type_id,
+                    name: input.name,
+                    kind: input.kind,
+                    ordinal: input.ordinal,
+                    creator_user_id: input.creator_user_id,
+                    last_editor_user_id: input.last_editor_user_id
+                }, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });
+    }
+    public async deleteAllTasks(projectId: string, areYouSure: boolean): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (!areYouSure) {
+                    throw new Error(`Fail safe here, you've disabled ability to delete tasks in the system`)
                 }
                 if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
                     throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
@@ -424,26 +524,288 @@ export class FieldwireSDK {
     }
     // #endregion
 
-    // #region Devices
-    public async devices(app: any): Promise<any[]> {
-        return new Promise(async (resolve, reject) => {
+    // #region Task Importer
+    public async importTasks(params: ResolverParams, rows: any[], app: express.Application) {
+        return new Promise(async(resolve, reject) => {
             try {
-                if (app.locals && app.locals.devices) {
-                    return resolve([...app.locals.devices])
+                if (FieldwireSDK.editableProjects.indexOf(params.projectId) < 0) {
+                    throw new Error(`Invalid Project Id: ${params.projectId} is not an editable project id`)
                 }
-                const sql = app.locals.sqlserver
-                const result = await sql.query(`SELECT * FROM materials`)
-                if (!result || !result.recordset) {
-                    throw new Error(`No materials found`)
+
+                const deviceResolver: DeviceResolver = new DeviceResolver(this, app)
+                await deviceResolver.init(params)
+                const toBeCreatedRelationsDelay: TaskRelationSchema[] = []
+
+                const fwFloorplans = await this.projectFloorplans(params.projectId, true)
+                if (!fwFloorplans || fwFloorplans.length <= 0) {
+                    throw new Error('Attempting to modify a project with no floorplans')
                 }
-                app.locals.devices = [...result.recordset]
-                return resolve([...app.locals.devices])
+                const fwFloorplan = fwFloorplans.find(s => s.id===params.floorplanId)
+                if (!fwFloorplan) {
+                    throw new Error(`Cannot find record in project for floorplan id ${params.floorplanId}`)
+                }
+
+                let importedCount = 0
+                const output: any[] = []
+                for(let i = 0; i < rows.length; i++) {
+                    const row = rows[i]
+
+                    const rd: ResolvedDevice | null = await deviceResolver.resolveDevice(params, row)
+                    if (!rd) {
+                        console.log(`Unable to resolve device ${JSON.stringify(row)}`)
+                        return
+                    }
+                    // Resolve Team Id
+                    if (!rd.fwTeamId) {
+                        console.log(`Could not find category (team) id for device ${rd.name}`)
+                    }
+
+                    const addressResolver: AddressResolver = new AddressResolver(rd, deviceResolver)
+                    const address = addressResolver.resolveAddress(params, row)
+                    const taskNameResolver: TaskNameResolver = new TaskNameResolver(rd, deviceResolver)
+                    const taskName = taskNameResolver.resolveTaskName(params, row, address)
+    
+                    const positionResolver: PositionResolver = new PositionResolver(rd, deviceResolver)
+                    const position = positionResolver.resolvePosition(params, row, fwFloorplan)
+                    console.dir(position)
+                    //const locationResolver: DeviceResolver = new DeviceResolver(this, app)
+                    //const priorityResolver: DeviceResolver = new DeviceResolver(this, app)
+    
+                    // should have root task w/category, any sub tasks
+                    //  and attributes for that device ready
+                    // create root task, create task attributes
+                    // create sub task, relate to root task
+                    // Create Sub Tasks for this Device
+                    // Need to know if there are sub tasks or not so we can calculate manpower
+                    //  either at the master level or sub task rollup
+                    const deviceSubTaskResolver: SubTaskResolver = new SubTaskResolver(rd, deviceResolver)
+                    const subTasks = await deviceSubTaskResolver.resolveSubTasks(params, row)
+
+                    const task: CreateTaskParams = {
+                        project_id: params.projectId, // From request
+                        creator_user_id: params.userId, // From request
+                        owner_user_id: params.userId, // From request
+                        floorplan_id: params.floorplanId, // From request
+                        team_id: rd.fwTeamId||'', // defeat ts complaint should never be null
+                        is_local: params.floorplanId?true:false,
+
+                        // Name Sample: 0020020161 - Power Monitor Shunt (CT1)
+                        name: taskName||rd.name,
+                        pos_x: position.posX,
+                        pos_y: position.posY,
+                        priority: 2,
+                        location_id: undefined,
+                        cost_value: rd.cost,
+                        man_power_value: subTasks && subTasks.length > 0 ? undefined : rd.defaultLabor
+                    }
+                    const resultCreateCoreTask = await this.createTask(task)
+                    console.log(`Create Task in Fieldwire`)
+                    console.dir(resultCreateCoreTask)
+                    rd.fwTaskId = resultCreateCoreTask.id
+
+                    // TODO: Map returned new taskId to handle in database
+                    // Create Import Map: handle, project, floorplan, device, task id
+                    output.push(resultCreateCoreTask)
+
+                    // Ensure Task Custom Attributes Exist
+                    const deviceAttrsResolver: AttributeResolver = new AttributeResolver(rd, deviceResolver)
+                    const attrs = await deviceAttrsResolver.resolveAttributes(params, row)
+                    // Create Task Attributes for TaskId
+                    for (let i = 0; i < attrs.length; i++) {
+                        const customTaskAttrFromDb: MaterialAttribute = attrs[i]
+                        const taskTypeAttributeLookup = deviceResolver.taskTypeAttributesFromFieldwire.find(s => s.name===customTaskAttrFromDb.name)
+                        if (taskTypeAttributeLookup && taskTypeAttributeLookup.id) {
+                            let taskAttribute: TaskAttributeSchema = {
+                                project_id: params.projectId,
+                                task_id: resultCreateCoreTask.id,
+                                task_type_attribute_id: taskTypeAttributeLookup.id,
+                                creator_user_id: +params.userId,
+                                last_editor_user_id: +params.userId
+                            }
+                            // set either text_value or number_value depending on valueType and defaultValue from db
+                            taskAttribute = deviceAttrsResolver.calculateAttributeValue(taskAttribute, customTaskAttrFromDb, params, row)
+                            // Create the Task Attribute
+                            const taskAttrResult = await this.createTaskAttribute(taskAttribute)
+                            console.log(`Created Task Attribute`)
+                            console.dir(taskAttrResult)
+                        }
+                    }
+
+                    // Create Sub Tasks
+                    if (subTasks && subTasks.length > 0) {
+                        for (let t = 0; t < subTasks.length; t++) {
+                            const subTask: MaterialSubTask = subTasks[t]
+                            const subTaskCreateItem: CreateTaskParams = {
+                                project_id: params.projectId, // From request
+                                creator_user_id: params.userId, // From request
+                                owner_user_id: params.userId, // From request
+                                floorplan_id: undefined, // params.floorplanId, // From request
+                                team_id: rd.fwTeamId||'', // defeat ts complaint should never be null
+                                is_local: false, // Sub tasks are never shown on floorplans
+        
+                                name: subTask.name,
+                                pos_x: 0,
+                                pos_y: 0,
+                                priority: 2,
+                                location_id: undefined,
+                                cost_value: 0,
+                                man_power_value: subTask.labor
+                            }
+                            const resultCreateSubTask = await this.createTask(subTaskCreateItem)
+                            console.log(`Create Sub Task in Fieldwire`)
+                            console.dir(resultCreateSubTask)        
+                            // Load Task Relationship
+                            toBeCreatedRelationsDelay.push({
+                                project_id: params.projectId,
+                                task_1_id: resultCreateCoreTask.id,
+                                task_2_id: resultCreateSubTask.id,
+                                creator_user_id: +params.userId
+                            })
+                            await Utils.sleep(500)
+                        } // end foreach sub task
+                    } // end if sub tasks exist
+
+                    importedCount++
+                    await Utils.sleep(500)
+                } // foreach row
+
+                // We have imported all the rows, now process relations
+                console.log(`Row import complete. Creating Task Relationships`)
+                await Utils.sleep(5000)
+                if (toBeCreatedRelationsDelay && toBeCreatedRelationsDelay.length > 0) {
+                    for (let r = 0; r < toBeCreatedRelationsDelay.length; r++) {
+                        const relation = toBeCreatedRelationsDelay[r]
+                        const coreTaskId = relation.task_1_id
+                        const subTaskId = relation.task_2_id
+                        console.log(`Create Task Relation`)
+                        const body = {
+                            project_id: relation.project_id,
+                            creator_user_id: relation.creator_user_id,
+                            task_1_id: relation.task_1_id,
+                            task_2_id: relation.task_2_id
+                        }
+                        console.dir(body)
+                        try {
+                            const resultCreateTaskRelation = await this.createTaskRelation(body)
+                            console.log(`Created Task Relation`)
+                            console.dir(resultCreateTaskRelation)
+                            await Utils.sleep(1000)    
+                        } catch (firstRetry) {
+                            // Cause of one task being created before another, swap places
+                            body.task_1_id = subTaskId
+                            body.task_2_id = coreTaskId
+                            const resultCreateTaskRelation = await this.createTaskRelation(body)
+                            console.log(`Created Task Relation`)
+                            console.dir(resultCreateTaskRelation)
+                            await Utils.sleep(1000)    
+                        }
+                    }
+                }
+
+                return resolve({
+                    message: `Imported ${importedCount} records`,
+                    output
+                })
             } catch (err) {
+                console.error(err)
                 return reject(err)
             }
-        });
+        })
     }
-
+    public async seedFromTestDevices(app: express.Application) {
+        return new Promise(async(resolve, reject) => {
+            try {
+                const sqldb: SqlDb = new SqlDb(app)
+                const testDevices: TestDevice[] = await sqldb.getTestDevices()
+                const categories = await sqldb.getCategories()
+                const devices = await sqldb.getDevices()
+                const vendors = await sqldb.getVendors()
+                const materials = await sqldb.getMaterials()
+                const deviceMaterials = await sqldb.getDeviceMaterials()
+                const eddyProducts = await sqldb.getEddyProducts()
+                const eddyPricelist = await sqldb.getEddyPricelist()
+                if (!testDevices || testDevices.length <= 0) {
+                    return resolve(false)
+                }
+                for (let i = 0; i < testDevices.length; i++) {
+                    const testDevice: TestDevice = testDevices[i]
+                    let testCategory: Category|null|undefined = categories.find(s => s.handle===testDevice.handle)
+                    if (!testCategory) {
+                        // Let's create a new one and store the id
+                        await sqldb.createCategory({
+                            categoryId: '', name: testDevice.category, shortName: testDevice.category, handle: testDevice.handle
+                        })
+                        testCategory = await sqldb.getCategoryByHandle(testDevice.handle)
+                    }
+                    const testVendor: Vendor|undefined = vendors.find(s => s.name===testDevice.vendorId)
+                    if (testCategory && testVendor) {
+                        // if this is edwards we have product details
+                        const testPricelist = eddyPricelist.find(s => s.PartNumber===testDevice.partNumber)
+                        const testProduct = eddyProducts.find(s => s.PartNumber===testDevice.partNumber)
+                        // Look if we have the material
+                        let testMaterial: Material | null | undefined = materials.find(s => s.vendorId===testVendor.vendorId && s.partNumber===testDevice.partNumber)
+                        if (!testMaterial) {
+                            // We need to create the material record
+                            const newMaterial: Material = {
+                                materialId: '',
+                                name: testDevice.title,
+                                shortName: testDevice.title,
+                                vendorId: testVendor?.vendorId,
+                                categoryId: testCategory?.categoryId,
+                                partNumber: testDevice.partNumber,
+                                link: testProduct?testProduct.ProductID:'',
+                                cost: testPricelist?testPricelist.SalesPrice:(testProduct?testProduct.SalesPrice:0),
+                                defaultLabor: defaultMaterialLabor,
+                                slcAddress: testDevice.slcAddress,
+                                serialNumber: testDevice.serialNumber,
+                                strobeAddress: testDevice.strobeAddress,
+                                speakerAddress: testDevice.speakerAddress
+                            }
+                            await sqldb.createMaterial(newMaterial)
+                            testMaterial = await sqldb.getMaterialByPartNumber(newMaterial.partNumber)
+                        }
+                        if (testMaterial) {
+                            // Check if device already exists, if not create it
+                            let testDeviceInDb: Device | null | undefined = devices.find(s => s.partNumber===testDevice?.partNumber && s.vendorId===testVendor.vendorId)
+                            if (!testDeviceInDb) {
+                                // We need to create the device record
+                                const newDevice: Device = {
+                                    deviceId: '',
+                                    name: testDevice.title,
+                                    shortName: testDevice.title,
+                                    vendorId: testVendor?.vendorId,
+                                    categoryId: testCategory?.categoryId,
+                                    partNumber: testDevice.partNumber,
+                                    link: testProduct?testProduct.ProductID:'',
+                                    cost: testPricelist?testPricelist.SalesPrice:(testProduct?testProduct.SalesPrice:0),
+                                    defaultLabor: defaultMaterialLabor,
+                                    slcAddress: testDevice.slcAddress,
+                                    serialNumber: testDevice.serialNumber,
+                                    strobeAddress: testDevice.strobeAddress,
+                                    speakerAddress: testDevice.speakerAddress
+                                }
+                                await sqldb.createDevice(newDevice)
+                                testDeviceInDb = await sqldb.getDeviceByPartNumber(newDevice.partNumber)
+                            }
+                            if (testDeviceInDb) {
+                                // We have Material and Device now
+                                // Make record into devicematerials
+                                let testDeviceMaterial: DeviceMaterial|undefined|null = deviceMaterials.find(s => s.deviceId===testDeviceInDb.deviceId&&s.materialId===testMaterial.materialId)
+                                if (!testDeviceMaterial) {
+                                    await sqldb.createDeviceMaterialMap(testDeviceInDb.deviceId, testMaterial.materialId)
+                                    testDeviceMaterial = await sqldb.getDeviceMaterialByIds(testDeviceInDb.deviceId, testMaterial.materialId)
+                                }
+                            }
+                        }
+                    }
+                }
+                return resolve(testDevices)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        })
+    }
     // #endregion
 
     // #region AWS
@@ -458,44 +820,6 @@ export class FieldwireSDK {
             }
         });
     }
-    // #endregion
-
-    // #region Utils
-
-    // Get Category Info for Project and Row combination
-    static getTeamIdFromName(projectId: string, name: string): string {
-        // projectId: Sample 01: 85285faa-a9dd-4c75-9f37-8a98faf4d09a
-        // projectId: Test: d0105078-da46-4a42-809f-b015b0cf87c8
-        // projectId: Block Setup 101: 4b9a65d3-4ce4-4308-b93e-4513ff98fc72
-        // projectId: Fieldwire Business Oklahoma Project: 39bd5799-295a-41e4-aaea-839f78393de2
-
-        if (projectId==='4b9a65d3-4ce4-4308-b93e-4513ff98fc72') {
-            // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
-            // pull station 970973b7-dca7-4302-8d07-38a97f7efe2c
-            // VESDA detector 77558dd3-cd37-43f5-8d57-dd10289ce532
-            // speaker strobe ceiling 3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a
-            const defaultTeam = '970973b7-dca7-4302-8d07-38a97f7efe2c' // pull station 970973b7-dca7-4302-8d07-38a97f7efe2c
-            if (!name) {
-                return defaultTeam
-            }
-            if (name.toLowerCase().indexOf('cd')) {
-                return '9219b7f1-85a3-42be-8df0-f460334c04e1' // speaker strobe 9219b7f1-85a3-42be-8df0-f460334c04e1
-            }
-            if (name.toLowerCase().indexOf('heat')) {
-                return '77558dd3-cd37-43f5-8d57-dd10289ce532' // VESDA detector 77558dd3-cd37-43f5-8d57-dd10289ce532
-            }
-            if (name.toLowerCase().indexOf('wp sv')) {
-                return '3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a' // speaker strobe ceiling 3bc6a2a6-f14c-40fb-9f53-e95cd4921c8a
-            }
-            switch(name.toLowerCase()) {
-                default:
-                    return defaultTeam
-            }
-        }
-
-        throw new Error(`No maps for project ${projectId}`)
-    }
-
     // #endregion
 
 }

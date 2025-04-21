@@ -1,0 +1,30 @@
+export interface ProjectSheetSchema {
+    id: string
+    creator_user_id: string
+    last_editor_user_id: string
+    project_id: string
+    name: string
+    file_name: string
+    version: number
+    floorplan_id: string
+    file_width: number
+    file_height: number
+    original_width: number
+    original_height: number
+    tile_size: number
+    is_tiled: boolean
+    page_number: number
+    android_file_width: number
+    android_file_height: number
+    sheet_upload_id: string
+    version_description: string
+    folder_id: string
+    rotate_degress: number
+    is_multipage: boolean
+    file_url: string
+    thumb_url: string
+    original_url: string
+    name_crop_url: string
+    tiles_resolution: number
+    tiles_resolution_type: number
+}

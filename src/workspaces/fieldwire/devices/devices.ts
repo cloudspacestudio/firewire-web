@@ -1,5 +1,6 @@
 import * as express from 'express'
 import { FieldwireSDK } from '../fieldwire'
+import { SqlDb } from '../repository/sqldb'
 
 export class FieldwireDevices {
 
@@ -11,7 +12,8 @@ export class FieldwireDevices {
                 const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
-                        const result = await fieldwire.devices(req.app)
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getDevices()
                         return res.status(200).json({
                             rows: result
                         })

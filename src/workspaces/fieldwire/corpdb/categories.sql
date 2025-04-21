@@ -1,7 +1,7 @@
 USE [corp]
 GO
 
-/****** Object:  Table [dbo].[categories]    Script Date: 4/2/2025 11:52:36 PM ******/
+/****** Object:  Table [dbo].[categories]    Script Date: 4/15/2025 6:42:33 AM ******/
 SET ANSI_NULLS ON
 GO
 
@@ -13,9 +13,6 @@ CREATE TABLE [dbo].[categories](
 	[name] [nvarchar](100) NOT NULL,
 	[shortName] [nvarchar](50) NOT NULL,
 	[handle] [nvarchar](10) NOT NULL,
-	[taskNameFormat] [nvarchar](200) NOT NULL,
-	[defaultCost] [money] NOT NULL,
-	[defaultLabor] [smallint] NOT NULL,
 	[createat] [date] NOT NULL,
 	[createby] [nvarchar](40) NOT NULL,
 	[updateat] [date] NOT NULL,

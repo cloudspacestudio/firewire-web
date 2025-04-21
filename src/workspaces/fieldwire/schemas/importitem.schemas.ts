@@ -3,6 +3,4 @@ export interface ImportItem {
     Visibility: string
     PosX: number
     PosY: number
-    Address?: string
 }
-

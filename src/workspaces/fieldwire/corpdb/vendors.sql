@@ -1,7 +1,7 @@
 USE [corp]
 GO
 
-/****** Object:  Table [dbo].[vendors]    Script Date: 4/2/2025 11:58:24 PM ******/
+/****** Object:  Table [dbo].[vendors]    Script Date: 4/15/2025 6:47:05 AM ******/
 SET ANSI_NULLS ON
 GO
 

@@ -1,7 +1,7 @@
 USE [corp]
 GO
 
-/****** Object:  Table [dbo].[materialSubTasks]    Script Date: 4/2/2025 11:57:49 PM ******/
+/****** Object:  Table [dbo].[materialSubTasks]    Script Date: 4/15/2025 6:46:00 AM ******/
 SET ANSI_NULLS ON
 GO
 

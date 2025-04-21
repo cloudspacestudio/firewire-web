@@ -2,7 +2,7 @@ export interface CreateTaskParams {
     project_id: string
     creator_user_id: string
     owner_user_id: string
-    floorplan_id: string
+    floorplan_id?: string
     team_id: string
     is_local: boolean
     name: string

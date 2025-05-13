@@ -559,9 +559,11 @@ export class FieldwireSDK {
                     if (!rd.fwTeamId) {
                         console.log(`Could not find category (team) id for device ${rd.name}`)
                     }
+                    
 
                     const addressResolver: AddressResolver = new AddressResolver(rd, deviceResolver)
                     const address = addressResolver.resolveAddress(params, row)
+
                     const taskNameResolver: TaskNameResolver = new TaskNameResolver(rd, deviceResolver)
                     const taskName = taskNameResolver.resolveTaskName(params, row, address)
     

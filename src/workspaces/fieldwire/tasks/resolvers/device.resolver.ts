@@ -12,6 +12,9 @@ import { TeamSchema } from '../../schemas/team.schema';
 import { MaterialAttribute } from '../../repository/materialattribute';
 import { TaskTypeAttributeSchema } from '../../schemas/tasktypeattribute';
 import { MaterialSubTask } from '../../repository/materialsubtask';
+import { DeviceResolutionStrategy } from '../../repository/deviceResolutionStrategy';
+import { DeviceAlias } from '../../repository/devicealias';
+import { DeviceStrategies, FormulaStrategy } from '../strategies/device.strategies';
 
 export class DeviceResolver {
 
@@ -22,6 +25,10 @@ export class DeviceResolver {
     public deviceMaterialsFromDb: DeviceMaterial[] = []
     public materialAttributesFromDb: MaterialAttribute[] = []
     public materialSubTasksFromDb: MaterialSubTask[] = []
+    public deviceResolutionStrategiesFromDb: DeviceResolutionStrategy[] = []
+    public deviceAliasesFromDb: DeviceAlias[] = []
+
+    public selectedDeviceResolutionStrategy: DeviceResolutionStrategy|null|undefined = null
 
     public teamsFromFieldwire: TeamSchema[] = []
     public taskTypeAttributesFromFieldwire: TaskTypeAttributeSchema[] = []
@@ -62,11 +69,27 @@ export class DeviceResolver {
                 if (!this.materialSubTasksFromDb || this.materialSubTasksFromDb.length <= 0) {
                     this.materialSubTasksFromDb = await this.sqldb.getMaterialSubTasks()
                 }
+                if (!this.deviceResolutionStrategiesFromDb || this.deviceResolutionStrategiesFromDb.length <= 0) {
+                    this.deviceResolutionStrategiesFromDb = await this.sqldb.getDeviceResolutionStrategies()
+                }
+                if (!this.deviceAliasesFromDb || this.deviceAliasesFromDb.length <= 0) {
+                    this.deviceAliasesFromDb = await this.sqldb.getDeviceAliases()
+                }
 
                 // Load "Teams" Categories for project from fieldwire
                 this.teamsFromFieldwire = await this.fw.teams(params.projectId)
                 // Load "Task Type Attributes" for project from fieldwire
                 this.taskTypeAttributesFromFieldwire = await this.fw.projectTaskTypeAttributes(params.projectId)
+
+                // Now determine the device resolution strategy
+                this.selectedDeviceResolutionStrategy = this.deviceResolutionStrategiesFromDb.find(s => s.batchId===params.batchId)
+                if (!this.selectedDeviceResolutionStrategy) {
+                    this.selectedDeviceResolutionStrategy = this.deviceResolutionStrategiesFromDb.find(s => s.projectId===params.projectId)
+                }
+                if (!this.selectedDeviceResolutionStrategy) {
+                    this.selectedDeviceResolutionStrategy = this.deviceResolutionStrategiesFromDb.find(s => s.projectId==='*')
+                }
+                
 
                 return resolve(true)
             } catch (err) {
@@ -79,37 +102,32 @@ export class DeviceResolver {
     resolveDevice(params: ResolverParams, row: any): Promise<ResolvedDevice|null> {
         return new Promise(async(resolve, reject) => {
             try {
-                const deviceNameFromRow = this.resolveDeviceName(params, row)
-                if (!deviceNameFromRow) {
-                    console.log(`Cannot determine device name for row ${JSON.stringify(row)}`)
+                const selectedDevice: Device | null = await this.resolveDeviceRecord(params, row)
+                if (!selectedDevice) {
+                    console.log(`Unable to locate a device record "${JSON.stringify(row)}"`)
                     return resolve(null)
                 }
-                const test = this.deviceCache.find(s => s.name===deviceNameFromRow)
+
+                const test = this.deviceCache.find(s => s.name===selectedDevice.name)
                 if (test) {
                     return resolve(test)
                 }
 
-                // First look for device with the desired field name
-                const testDeviceExists = this.devicesFromDb.find(s => s.name===deviceNameFromRow || s.shortName===deviceNameFromRow)
-                if (!testDeviceExists) {
-                    console.log(`Unable to locate a device record for name "${deviceNameFromRow}"`)
-                    return resolve(null)
-                }
-
-                const category = this.categoriesFromDb.find(s => s.categoryId===testDeviceExists.categoryId)
-                const vendor = this.vendorsFromDb.find(s => s.vendorId===testDeviceExists.vendorId)
+                const category = this.categoriesFromDb.find(s => s.categoryId===selectedDevice.categoryId)
+                const vendor = this.vendorsFromDb.find(s => s.vendorId===selectedDevice.vendorId)
                 if (!category) {
-                    console.log(`Unable to locate corresponding related category for device "${deviceNameFromRow}" using categoryId of "${testDeviceExists.categoryId}"`)
+                    console.log(`Unable to locate corresponding related category for device "${selectedDevice.name}" using categoryId of "${selectedDevice.categoryId}"`)
                     return resolve(null)
                 }
                 if (!vendor) {
-                    console.log(`Unable to locate corresponding related vendor for device "${deviceNameFromRow}" using vendorId of "${testDeviceExists.vendorId}"`)
+                    console.log(`Unable to locate corresponding related vendor for device "${selectedDevice.name}" using vendorId of "${selectedDevice.vendorId}"`)
                     return resolve(null)
                 }
                 let fwTeam = this.teamsFromFieldwire.find(s=>s.name===category.name)
                 if (!fwTeam) {
                     // Do we automatically create the category in Fieldwire?
                     fwTeam = await this.fw.createTeam({
+                        
                         id: '',
                         handle: category.handle,
                         name: category.name,
@@ -118,24 +136,24 @@ export class DeviceResolver {
                     this.teamsFromFieldwire.push(fwTeam)
                 }
                 const resolvedDevice: ResolvedDevice = {
-                        id: testDeviceExists.deviceId,
-                        name: testDeviceExists.name,
-                        shortName: testDeviceExists.shortName,
-                        partNumber: testDeviceExists.partNumber,
-                        link: testDeviceExists.link,
-                        cost: testDeviceExists.cost,
-                        defaultLabor: testDeviceExists.defaultLabor,
+                        id: selectedDevice.deviceId,
+                        name: selectedDevice.name,
+                        shortName: selectedDevice.shortName,
+                        partNumber: selectedDevice.partNumber,
+                        link: selectedDevice.link,
+                        cost: selectedDevice.cost,
+                        defaultLabor: selectedDevice.defaultLabor,
                         category: category,
                         vendor: vendor,
                         materials: [],
-                        slcAddress: testDeviceExists.slcAddress,
-                        serialNumber: testDeviceExists.serialNumber,
-                        strobeAddress: testDeviceExists.strobeAddress,
-                        speakerAddress: testDeviceExists.speakerAddress,
+                        slcAddress: selectedDevice.slcAddress,
+                        serialNumber: selectedDevice.serialNumber,
+                        strobeAddress: selectedDevice.strobeAddress,
+                        speakerAddress: selectedDevice.speakerAddress,
                         fwTeamId: fwTeam.id
                 }
                 // resolve this device product list
-                const deviceMaterialsTest = this.deviceMaterialsFromDb.filter(s => s.deviceId===testDeviceExists.deviceId)
+                const deviceMaterialsTest = this.deviceMaterialsFromDb.filter(s => s.deviceId===selectedDevice.deviceId)
                 if (deviceMaterialsTest && deviceMaterialsTest.length > 0) {
                     // We found records, load from materials repo
                     deviceMaterialsTest.forEach((deviceMaterial: DeviceMaterial) => {
@@ -143,16 +161,16 @@ export class DeviceResolver {
                         if (materialTest) {
                             resolvedDevice.materials.push(materialTest)
                         } else {
-                            console.warn(`Unable to locate material id ${deviceMaterial.materialId} for device ${testDeviceExists.name}`)
+                            console.warn(`Unable to locate material id ${deviceMaterial.materialId} for device ${selectedDevice.name}`)
                         }
                     })
                 } else {
                     // There were no device material records found. Default to use device part number
-                    const materialByPartAndVendor = this.materialsFromDb.find((s: Material) => s.partNumber===testDeviceExists.partNumber && s.vendorId===testDeviceExists.vendorId)
+                    const materialByPartAndVendor = this.materialsFromDb.find((s: Material) => s.partNumber===selectedDevice.partNumber && s.vendorId===selectedDevice.vendorId)
                     if (materialByPartAndVendor) {
                         resolvedDevice.materials.push(materialByPartAndVendor)
                     } else {
-                        console.warn(`Unable to set default material to match device id ${testDeviceExists.name} for part number ${testDeviceExists.partNumber} and vendor id ${testDeviceExists.vendorId}`)
+                        console.warn(`Unable to set default material to match device id ${selectedDevice.name} for part number ${selectedDevice.partNumber} and vendor id ${selectedDevice.vendorId}`)
                     }
                 }
 
@@ -174,8 +192,74 @@ export class DeviceResolver {
         return value is expected to match either devices.name, devices.shortName
         return value can return an alias from devicealiases table as well
     */
-    private resolveDeviceName(params: ResolverParams, row: any): string {
-        return row['Visibility']
+    private resolveDeviceRecord(params: ResolverParams, row: any): Promise<Device|null> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                if (this.selectedDeviceResolutionStrategy) {
+                    // Use the strategy from formula to read the device key and fetch the device
+                    // Syntax of column names to use as lookups in device table
+                    // name=Visibility|part number=partNumber etc.
+                    // for simplicity and until we lock in the strategy, use static values
+                    const deviceStrategies: DeviceStrategies = new DeviceStrategies()
+                    const strategy: FormulaStrategy | undefined = deviceStrategies.strategies.find(s=>s.name===this.selectedDeviceResolutionStrategy?.formula)
+                    if (strategy) {
+                        const strategyResult = await strategy.fx(params, row, this.devicesFromDb, this.deviceAliasesFromDb)
+                        return resolve(strategyResult)
+                    } else {
+                        const defaultResult = await this.defaultResolveDeviceRecord(params, row)
+                        return resolve(defaultResult)
+                    }
+                } else {
+                    const result = await this.defaultResolveDeviceRecord(params, row)
+                    return resolve(result)
+                }
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        })
+
+    }
+
+    private defaultResolveDeviceRecord(params: ResolverParams, row: any): Promise<Device|null> {
+        return new Promise(async(resolve, reject) => {
+            const defaultDeviceFieldName = 'Visibility'
+            try {
+                const test = this.devicesFromDb.find(s => s.name===row[defaultDeviceFieldName])
+                if (test) {
+                    return resolve(test)
+                }
+                // Check device aliases
+                return resolve(DeviceResolver.searchForAlias(row[defaultDeviceFieldName], params,
+                    this.devicesFromDb, this.deviceAliasesFromDb
+                ))
+            } catch (err) {
+                return reject(err)
+            }
+        })
+    }
+
+    static searchForAlias(text: string, params: ResolverParams, 
+        devicesFromDb: Device[],
+        deviceAliasesFromDb: DeviceAlias[]): Device|null {
+        let aliases = deviceAliasesFromDb.filter(s => s.aliasText===text && s.batchId===params.batchId)
+        if (aliases.length <= 0) {
+            aliases = deviceAliasesFromDb.filter(s => s.aliasText === text && s.projectId===params.projectId)
+        }
+        if (aliases.length <= 0) {
+            aliases = deviceAliasesFromDb.filter(s => s.aliasText===text && s.projectId==='*')
+        }
+        if (aliases.length <= 0) {
+            return null
+        }
+        let foundDevice: Device|null = null
+        aliases.forEach((alias: DeviceAlias) => {
+            const test = devicesFromDb.find(s => s.name===alias.matchToText)
+            if (test && !foundDevice) {
+                foundDevice = Object.assign({}, test)
+            }
+        })
+        return foundDevice
     }
 
 }

@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[vendors]    Script Date: 4/15/2025 6:47:05 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[vendors](
 	[vendorId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,

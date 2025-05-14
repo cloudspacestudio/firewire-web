@@ -1,18 +1,8 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[importItems]    Script Date: 4/15/2025 6:45:11 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[importItems](
 	[importItemId] [nvarchar](40) NOT NULL,
 	[importId] [nvarchar](40) NOT NULL,
 	[status] [nvarchar](50) NOT NULL,
-	[handle] [nvarchar](40) NOT NULL,
+	[deviceId] [nvarchar](40) NOT NULL,
 	[title] [nvarchar](50) NOT NULL,
 	[taskId] [nvarchar](50) NOT NULL,
 	[masterOnly] [bit] NOT NULL,

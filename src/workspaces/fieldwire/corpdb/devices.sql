@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[devices]    Script Date: 4/15/2025 6:44:12 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[devices](
 	[deviceId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,
@@ -26,6 +16,7 @@ CREATE TABLE [dbo].[devices](
 	[createby] [nvarchar](40) NOT NULL,
 	[updateat] [date] NOT NULL,
 	[updateby] [nvarchar](40) NOT NULL,
+    [org] [nvarchar](40) NULL,
  CONSTRAINT [PK_devices2] PRIMARY KEY CLUSTERED 
 (
 	[deviceId] ASC

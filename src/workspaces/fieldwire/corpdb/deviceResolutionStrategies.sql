@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[deviceResolutionStrategies]    Script Date: 4/23/2025 8:53:43 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[deviceResolutionStrategies](
 	[resolutionId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,

@@ -51,6 +51,7 @@ You can install local databases for free to use with development
 
 ### SQL Server
 https://www.microsoft.com/en-us/sql-server/sql-server-downloads
+firewire-dev.database.windows.net
 
 ## Manifest Pattern
 Create files in the workspaces directory that include in their name "manifest" and inherit (extend) BaseManifest class. They must export a default class that extends BaseManifest as demonstrated below

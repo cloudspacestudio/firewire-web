@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[documents]    Script Date: 4/15/2025 6:44:35 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[documents](
 	[documentId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,

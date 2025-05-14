@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[EddyPricelist]    Script Date: 4/15/2025 6:44:47 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[EddyPricelist](
 	[ParentCategory] [nvarchar](500) NULL,
 	[Category] [nvarchar](500) NULL,

@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[EddyProducts]    Script Date: 4/15/2025 6:45:00 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[EddyProducts](
 	[RecordID] [nvarchar](50) NOT NULL,
 	[ProductID] [int] NOT NULL,

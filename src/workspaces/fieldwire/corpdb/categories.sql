@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[categories]    Script Date: 4/15/2025 6:42:33 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[categories](
 	[categoryId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,

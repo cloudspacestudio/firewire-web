@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[materialSubTasks]    Script Date: 4/15/2025 6:46:00 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[materialSubTasks](
 	[materialSubTaskId] [nvarchar](40) NOT NULL,
 	[materialId] [nvarchar](40) NOT NULL,
@@ -20,6 +10,7 @@ CREATE TABLE [dbo].[materialSubTasks](
 	[createby] [nvarchar](40) NOT NULL,
 	[updateat] [date] NOT NULL,
 	[updateby] [nvarchar](40) NOT NULL,
+    [org] [nvarchar](40) NULL,
  CONSTRAINT [PK_materialsubtasks] PRIMARY KEY CLUSTERED 
 (
 	[materialSubTaskId] ASC

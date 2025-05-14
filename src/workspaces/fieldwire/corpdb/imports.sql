@@ -1,13 +1,3 @@
-USE [corp]
-GO
-
-/****** Object:  Table [dbo].[imports]    Script Date: 4/15/2025 6:45:22 AM ******/
-SET ANSI_NULLS ON
-GO
-
-SET QUOTED_IDENTIFIER ON
-GO
-
 CREATE TABLE [dbo].[imports](
 	[importId] [nvarchar](40) NOT NULL,
 	[userId] [nvarchar](40) NOT NULL,
@@ -25,6 +15,7 @@ CREATE TABLE [dbo].[imports](
 	[createby] [nvarchar](40) NOT NULL,
 	[updateat] [date] NOT NULL,
 	[updateby] [nvarchar](40) NOT NULL,
+    [org] [nvarchar](40) NULL,
  CONSTRAINT [PK_imports] PRIMARY KEY CLUSTERED 
 (
 	[importId] ASC

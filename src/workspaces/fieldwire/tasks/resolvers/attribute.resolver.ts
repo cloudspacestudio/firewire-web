@@ -1,3 +1,5 @@
+import { v4 } from 'uuid';
+
 import { MaterialAttribute } from "../../repository/materialattribute";
 import { ResolvedDevice } from "../../schemas/resolvedDevice";
 import { TaskAttributeSchema } from "../../schemas/taskattribute.schema";
@@ -36,16 +38,19 @@ export class AttributeResolver {
                         console.log(`Need to create custom attribute "${attr.name}"`)
                         const toBeOrdinal = this.deviceResolver.taskTypeAttributesFromFieldwire.length + 1
                         const customTaskAttr: TaskTypeAttributeSchema = {
-                            id: '', project_id: params.projectId, task_type_id: defaultTaskTypeId,
+                            id: v4(), project_id: params.projectId, task_type_id: defaultTaskTypeId,
                             name: attr.name, 
                             kind: this.getKindOfAttribute(attr), // 21 is shorttext 22 is number
                             ordinal: toBeOrdinal,
                             visible: true, always_visibile: false,
                             creator_user_id: params.userId, last_editor_user_id: params.userId
                         }
-                        console.log(JSON.stringify(customTaskAttr, null, 1))
-                        testAttrInFw = await this.deviceResolver.fw.createProjectTaskTypeAttribute(customTaskAttr)
-                        this.deviceResolver.taskTypeAttributesFromFieldwire.push(testAttrInFw)
+                        if (!params.previewMode) {
+                            testAttrInFw = await this.deviceResolver.fw.createProjectTaskTypeAttribute(customTaskAttr)
+                            this.deviceResolver.taskTypeAttributesFromFieldwire.push(testAttrInFw)
+                        } else {
+                            this.deviceResolver.taskTypeAttributesFromFieldwire.push(customTaskAttr)
+                        }
                     }
                 }
                 console.log(`Confirmed material attributes list:`)

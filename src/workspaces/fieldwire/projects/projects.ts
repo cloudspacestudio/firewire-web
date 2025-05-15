@@ -323,6 +323,26 @@ export class FieldwireProjects {
                     }
                 })
             }
+        },
+        // Get Editable Project Ids
+        {
+            method: 'get',
+            path: '/api/fieldwire/account/editableprojectids',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const result = await fieldwire.editableProjects()
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
         }
     ]
 

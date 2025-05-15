@@ -9,38 +9,39 @@ export class DeviceStrategies {
 
     public strategies: FormulaStrategy[] = [
         {
-            name: 'test.fa2.01',
+            name: 'default',
             fx(params: ResolverParams, row: any, devicesFromDb: Device[], aliasesFromDb: DeviceAlias[]): Promise<Device|null> {
                 return new Promise(async(resolve, reject) => {
                     try {
-                        const title = row['Visibility']
-                        const deviceA = row['DEVICEA']
-                        const deviceC = row['DEVICEC']
+                        throw new Error(`Not Implemented`)
+                        // const title = row['Visibility']
+                        // const deviceA = row['DEVICEA']
+                        // const deviceC = row['DEVICEC']
 
-                        // Look for simple first
-                        const testSimple = devicesFromDb.find(s => s.name===title)
-                        if (testSimple) {
-                            return resolve(testSimple)
-                        }
-                        if (deviceA) {
-                            // Lookup by part number
-                            const testDeviceA = devicesFromDb.find(s => s.partNumber===deviceA)
-                            if (testDeviceA) {
-                                return resolve(testDeviceA)
-                            }
-                        }
-                        if (deviceC) {
-                            const testDeviceC = devicesFromDb.find(s => s.partNumber===deviceC)
-                            if(testDeviceC) {
-                                return resolve(testDeviceC)
-                            }
-                        }
+                        // // Look for simple first
+                        // const testSimple = devicesFromDb.find(s => s.name===title)
+                        // if (testSimple) {
+                        //     return resolve(testSimple)
+                        // }
+                        // if (deviceA) {
+                        //     // Lookup by part number
+                        //     const testDeviceA = devicesFromDb.find(s => s.partNumber===deviceA)
+                        //     if (testDeviceA) {
+                        //         return resolve(testDeviceA)
+                        //     }
+                        // }
+                        // if (deviceC) {
+                        //     const testDeviceC = devicesFromDb.find(s => s.partNumber===deviceC)
+                        //     if(testDeviceC) {
+                        //         return resolve(testDeviceC)
+                        //     }
+                        // }
                         // Check device aliases
-                        const aliasedDevice = DeviceResolver.searchForAlias(title, params, devicesFromDb, aliasesFromDb)
-                        if (aliasedDevice) {
-                            return resolve(aliasedDevice)
-                        }
-                        return resolve(null)
+                        // const aliasedDevice = DeviceResolver.searchForAlias(title, params, devicesFromDb, aliasesFromDb)
+                        // if (aliasedDevice) {
+                        //     return resolve(aliasedDevice)
+                        // }
+                        //return resolve(null)
                     } catch (err) {
                         return reject(err)
                     }

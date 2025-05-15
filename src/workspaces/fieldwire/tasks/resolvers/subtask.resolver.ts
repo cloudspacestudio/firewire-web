@@ -22,7 +22,7 @@ export class SubTaskResolver {
                     tasks.push(preciseItem)
                 })
                 genericTasks.forEach((genericItem: MaterialSubTask) => {
-                    const alreadyExistsTest = tasks.find(s => s.name===genericItem.name)
+                    const alreadyExistsTest = tasks.find(s => s.statusName===genericItem.statusName)
                     if (!alreadyExistsTest) {
                         tasks.push(genericItem)
                     }

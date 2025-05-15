@@ -87,7 +87,6 @@ export class Bootstrap {
                     }
                     const sqlserver = new MsSqlServerDb(sqlConfig)
                     console.log(`miSSion.webserver: stoodup sql server`)
-                    console.dir(sqlConfig)
                     app.locals.sqlserver = sqlserver
                 }
                 // #endregion

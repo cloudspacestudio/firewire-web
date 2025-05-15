@@ -1,9 +1,10 @@
 export interface MaterialSubTask {
     materialSubTaskId: string
-    name: string
-    note: string
     materialId: string
-    projectId: string
-    labor: number
+    statusName: string
+    taskNameFormat: string
+    laborHours: number
     ordinal: number
+    projectId: string
+    org?: string
 }

@@ -7,4 +7,5 @@ export interface MaterialAttribute {
     valueType: string
     defaultValue: string
     ordinal: number
+    toBeValue: number | string | null
 }

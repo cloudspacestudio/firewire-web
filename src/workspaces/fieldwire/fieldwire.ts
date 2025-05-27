@@ -544,7 +544,7 @@ export class FieldwireSDK {
     // #region Task Importer
     public async importTasks(params: ResolverParams, rows: any[], app: express.Application) {
         return new Promise(async(resolve, reject) => {
-            try {
+            try { 
                 // #region Preconditions
                 if (!params.previewMode) {
                     throw new Error(`Attempted to call preview method without preview mode variable being set to true`)
@@ -580,7 +580,7 @@ export class FieldwireSDK {
                             resolvedDevice: undefined, 
                             subTaskDefs: [],
                             attrs: [],
-                            messages: [`Unable to resolve device for ${row['Visibility']}`]
+                            messages: [`${row['Visibility']}`]
                         })
                         if(unresolvedNames.indexOf(row['Visibility'])<0) {
                             unresolvedNames.push(row['Visibility'])
@@ -628,6 +628,10 @@ export class FieldwireSDK {
                         // Ensure Task Custom Attributes Exist
                         const deviceAttrsResolver: AttributeResolver = new AttributeResolver(rd, deviceResolver)
                         const attrs = await deviceAttrsResolver.resolveAttributes(params, row)
+                        attrs.forEach((attr) => {
+                            const value = deviceAttrsResolver.calculatePreviewAttrValue(attr, params, row)
+                            attr.toBeValue = value
+                        })
                         if (attrs) {
                             preview.attrs = [...attrs]
                         }
@@ -645,6 +649,8 @@ export class FieldwireSDK {
                         uniqueDeviceIds.push(record.resolvedDevice.id)
                         uniqueDevices.push(Object.assign({}, record.resolvedDevice))
                     }
+                    record.deviceId = record.resolvedDevice?.id
+                    delete record.resolvedDevice
                 }
                 return resolve({
                     message: `Preview would have imported ${importedCount} of ${rows.length} records`,
@@ -962,6 +968,7 @@ export class FieldwireSDK {
 export interface PreviewResponse {
     id: string
     row: any
+    deviceId?: string
     resolvedDevice?: ResolvedDevice
     messages: string[]
     subTaskDefs: MaterialSubTask[]

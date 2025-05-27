@@ -17,6 +17,8 @@ export class AttributeResolver {
                 const defaultTaskTypeId = this.deviceResolver.taskTypeAttributesFromFieldwire[0].task_type_id
                 const preciseAttrs: MaterialAttribute[] = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId===params.projectId && s.materialId===this.resolvedDevice.id)
                 const genericAttrs: MaterialAttribute[] = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId==='*' && s.materialId===this.resolvedDevice.id)
+                const globalProjectAttrs: MaterialAttribute[] = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId===params.projectId && s.materialId==='*')
+                const globalOrgAttrs: MaterialAttribute[] = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId==='*' && s.materialId==='*')
                 // Make sure fieldwire has custom attributes available
                 // Merge 2 collections together loading most precise first
                 const attrs: MaterialAttribute[] = []
@@ -24,6 +26,18 @@ export class AttributeResolver {
                     attrs.push(preciseItem)
                 })
                 genericAttrs.forEach((genericItem: MaterialAttribute) => {
+                    const alreadyExistsTest = attrs.find(s => s.name===genericItem.name)
+                    if (!alreadyExistsTest) {
+                        attrs.push(genericItem)
+                    }
+                })
+                globalProjectAttrs.forEach((genericItem: MaterialAttribute) => {
+                    const alreadyExistsTest = attrs.find(s => s.name===genericItem.name)
+                    if (!alreadyExistsTest) {
+                        attrs.push(genericItem)
+                    }
+                })
+                globalOrgAttrs.forEach((genericItem: MaterialAttribute) => {
                     const alreadyExistsTest = attrs.find(s => s.name===genericItem.name)
                     if (!alreadyExistsTest) {
                         attrs.push(genericItem)
@@ -53,8 +67,8 @@ export class AttributeResolver {
                         }
                     }
                 }
-                console.log(`Confirmed material attributes list:`)
-                console.dir(attrs)
+                //console.log(`Confirmed material attributes list:`)
+                //console.dir(attrs)
                 return resolve(attrs)
             } catch (err) { 
                 console.error(err)
@@ -79,6 +93,29 @@ export class AttributeResolver {
                 return 21
             
         }
+    }
+
+    public calculatePreviewAttrValue(attr: MaterialAttribute, params: ResolverParams, row: any): string | number | null {
+        const defaultCalc = attr.defaultValue
+        if (!defaultCalc) {
+            return null
+        }
+        const valueType = this.getKindOfAttribute(attr)
+        if (defaultCalc.startsWith("F'")) {
+            const fieldName = defaultCalc.replace("F'","").replace("'", "")
+            const testValue = row[fieldName]
+            if (!testValue) {
+                return null
+            }
+            if (valueType===22) {
+                if (isNaN(testValue)) {
+                    return testValue                            
+                }
+                return +testValue
+            }
+            return testValue
+        }
+        return defaultCalc
     }
 
     public calculateAttributeValue(taskAttrToBeCreated: TaskAttributeSchema, 

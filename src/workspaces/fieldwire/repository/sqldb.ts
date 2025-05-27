@@ -11,7 +11,8 @@ import { MaterialAttribute } from './materialattribute';
 import { MaterialSubTask } from './materialsubtask';
 import { DeviceResolutionStrategy } from './deviceResolutionStrategy';
 import { DeviceAlias } from './devicealias';
-import { VwDevice } from './vwdevices';
+import { VwDevice } from './vwdevice';
+import { VwMaterial } from './vwmaterial';
 
 export class SqlDb {
 
@@ -33,6 +34,9 @@ export class SqlDb {
     public async getMaterials(): Promise<Material[]> {
         return this._getMany<Material>('materials')
     }
+    public async getVwMaterials(): Promise<VwMaterial[]> {
+        return this._getMany<VwMaterial>('vwMaterials')
+    }
     public async getDeviceMaterials(): Promise<DeviceMaterial[]> {
         return this._getMany<DeviceMaterial>('devicematerials')
     }
@@ -52,7 +56,7 @@ export class SqlDb {
         return this._getMany<EddyProduct>('EddyProducts')
     }
     public async getEddyPricelist(): Promise<EddyPricelist[]> {
-        return this._getMany<EddyPricelist>('EddyPricelist')
+        return this._getMany<EddyPricelist>('EddyPricelist', `ProductStatus IS NULL`)
     }
     public async createCategory(input: Category): Promise<boolean> {
         return new Promise(async(resolve, reject) => {

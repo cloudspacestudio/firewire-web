@@ -235,9 +235,10 @@ export class DeviceResolver {
         return new Promise(async(resolve, reject) => {
             const defaultDeviceFieldName = 'Visibility'
             const defaultFieldSearch = [
-                {ordinal: 0, deviceField: 'partNumber', rowField: 'DEVICEA'},
-                {ordinal: 1, deviceField: 'partNumber', rowField: 'DEVICEC'},
-                {ordinal: 2, deviceField: 'partNumber', rowField: 'DEVICEF'},
+                {ordinal: 0, deviceField: 'name', rowField: 'VISIBILITY'},
+                {ordinal: 1, deviceField: 'partNumber', rowField: 'DEVICEA'},
+                {ordinal: 2, deviceField: 'partNumber', rowField: 'DEVICEC'},
+                {ordinal: 3, deviceField: 'partNumber', rowField: 'DEVICEF'},
             ]
             try {
                 // Check for Full Name

@@ -628,12 +628,12 @@ export class FieldwireSDK {
                         // Ensure Task Custom Attributes Exist
                         const deviceAttrsResolver: AttributeResolver = new AttributeResolver(rd, deviceResolver)
                         const attrs = await deviceAttrsResolver.resolveAttributes(params, row)
-                        attrs.forEach((attr) => {
+                        preview.attrs = []
+                        for(let a = 0; a < attrs.length; a++) {
+                            const attr = attrs[a]
                             const value = deviceAttrsResolver.calculatePreviewAttrValue(attr, params, row)
                             attr.toBeValue = value
-                        })
-                        if (attrs) {
-                            preview.attrs = [...attrs]
+                            preview.attrs.push(Object.assign({}, attr))
                         }
                         importedCount++
                         output.push(preview)

@@ -5,6 +5,7 @@ import { SqlDb } from '../repository/sqldb'
 export class FieldwireDevices {
 
     static manifestItems = [
+        // Get Devices
         {
             method: 'get',
             path: '/api/fieldwire/devices',
@@ -25,6 +26,32 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get Device
+        {
+            method: 'get',
+            path: '/api/fieldwire/devices/:deviceId',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const deviceId = req.params.deviceId
+                        if (!deviceId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing deviceId parameter'
+                            })
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getDevice(deviceId)
+                        return res.status(200).json(result)
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get View Devices
         {
             method: 'get',
             path: '/api/fieldwire/vwdevices',
@@ -45,6 +72,109 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get View Device Materials
+        {
+            method: 'get',
+            path: '/api/fieldwire/vwdevicematerials',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getVwDeviceMaterials()
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get View Device Materials by Device Id
+        {
+            method: 'get',
+            path: '/api/fieldwire/vwdevicematerials/:deviceId',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const deviceId = req.params.deviceId
+                        if (!deviceId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing deviceId parameter'
+                            })
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getDeviceMaterialByDeviceId(deviceId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get Device Attributes by Device Id
+        {
+            method: 'get',
+            path: '/api/fieldwire/devices/:deviceId/attributes',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const deviceId = req.params.deviceId
+                        if (!deviceId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing deviceId parameter'
+                            })
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getMaterialAttributesByDeviceId(deviceId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get Device Sub Tasks by Device Id
+        {
+            method: 'get',
+            path: '/api/fieldwire/devices/:deviceId/subtasks',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const deviceId = req.params.deviceId
+                        if (!deviceId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing deviceId parameter'
+                            })
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getMaterialSubTasksByDeviceId(deviceId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get View Materials
         {
             method: 'get',
             path: '/api/fieldwire/vwmaterials',
@@ -65,6 +195,7 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get Categories
         {
             method: 'get',
             path: '/api/fieldwire/categories',
@@ -85,6 +216,7 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get Vendors
         {
             method: 'get',
             path: '/api/fieldwire/vendors',
@@ -105,6 +237,7 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get Eddy Products
         {
             method: 'get',
             path: '/api/fieldwire/eddyproducts',
@@ -125,6 +258,7 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get Eddy Pricelist
         {
             method: 'get',
             path: '/api/fieldwire/eddypricelist',

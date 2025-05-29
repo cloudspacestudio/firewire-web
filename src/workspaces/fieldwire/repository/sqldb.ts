@@ -13,6 +13,7 @@ import { DeviceResolutionStrategy } from './deviceResolutionStrategy';
 import { DeviceAlias } from './devicealias';
 import { VwDevice } from './vwdevice';
 import { VwMaterial } from './vwmaterial';
+import { VwDeviceMaterial } from './vwdevicematerial';
 
 export class SqlDb {
 
@@ -21,6 +22,9 @@ export class SqlDb {
     // #region Sql Table Queries
     public async getDevices(): Promise<Device[]> {
         return this._getMany<Device>('devices')
+    }
+    public async getDevice(deviceId: string): Promise<VwDevice|null> {
+        return this._getOne<VwDevice>('vwDevices', `deviceId='${deviceId}'`)
     }
     public async getVwDevices(): Promise<VwDevice[]> {
         return this._getMany<VwDevice>('vwDevices')
@@ -37,6 +41,9 @@ export class SqlDb {
     public async getVwMaterials(): Promise<VwMaterial[]> {
         return this._getMany<VwMaterial>('vwMaterials')
     }
+    public async getVwDeviceMaterials(): Promise<VwDeviceMaterial[]> {
+        return this._getMany<VwDeviceMaterial>('vwDeviceMaterials')
+    }
     public async getDeviceMaterials(): Promise<DeviceMaterial[]> {
         return this._getMany<DeviceMaterial>('devicematerials')
     }
@@ -46,9 +53,16 @@ export class SqlDb {
     public async getMaterialAttributes(): Promise<MaterialAttribute[]> {
         return this._getMany<MaterialAttribute>('materialAttributes')
     }
+    public async getMaterialAttributesByDeviceId(deviceId: string): Promise<MaterialAttribute[]> {
+        return this._getMany<MaterialAttribute>('materialAttributes', `materialId='${deviceId}'`)
+    }
     public async getMaterialSubTasks(): Promise<MaterialSubTask[]> {
         return this._getMany<MaterialSubTask>('materialSubTasks')
     }
+    public async getMaterialSubTasksByDeviceId(deviceId: string): Promise<MaterialSubTask[]> {
+        return this._getMany<MaterialSubTask>('materialSubTasks', `materialId='${deviceId}'`)
+    }
+    
     public async getTestDevices(): Promise<TestDevice[]> {
         return this._getMany<TestDevice>('testdevices')
     }
@@ -143,6 +157,9 @@ export class SqlDb {
         })
 
     }
+    public async getDeviceMaterialByDeviceId(deviceId: string): Promise<VwDeviceMaterial[]|null> {
+        return this._getMany<VwDeviceMaterial>('vwDeviceMaterials', `deviceId='${deviceId}'`)
+    }
     public async getDeviceMaterialByIds(deviceId: string, materialId: string): Promise<DeviceMaterial|null> {
         return this._getOne<DeviceMaterial>('devicematerials', `deviceId='${deviceId}' AND materialId='${materialId}`)
     }
@@ -156,7 +173,7 @@ export class SqlDb {
     private _getMany<T>(tableName: string, filter?: string, sort?: string): Promise<T[]> {
         return new Promise<T[]>(async(resolve, reject) => {
             try {
-                if (this.app.locals && this.app.locals[tableName]) {
+                if (this.app.locals && this.app.locals[tableName] && !filter) {
                     return resolve([...this.app.locals[tableName]])
                 }
                 const sql = this.app.locals.sqlserver
@@ -171,8 +188,10 @@ export class SqlDb {
                 if (!result || !result.recordset) {
                     throw new Error(`No ${tableName} with filter ${filter} found`)
                 }
-                this.app.locals[tableName] = [...result.recordset]
-                return resolve([...this.app.locals[tableName]])
+                if (!filter) {
+                    this.app.locals[tableName] = [...result.recordset]
+                }
+                return resolve([...result.recordset])
             } catch (err: any) {
                 if (!err.handled) {
                     err.handled = true
@@ -200,6 +219,9 @@ export class SqlDb {
                 }
                 if (result.length > 0) {
                     return resolve(result[0])
+                }
+                if (result.recordset && result.recordset.length > 0) {
+                    return resolve(result.recordset[0])
                 }
                 return resolve(null as any)
             } catch (err: any) {

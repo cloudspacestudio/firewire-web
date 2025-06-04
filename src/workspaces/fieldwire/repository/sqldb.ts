@@ -14,6 +14,7 @@ import { DeviceAlias } from './devicealias';
 import { VwDevice } from './vwdevice';
 import { VwMaterial } from './vwmaterial';
 import { VwDeviceMaterial } from './vwdevicematerial';
+import { VwEddyPricelist } from './vwEddyPricelist';
 
 export class SqlDb {
 
@@ -71,6 +72,12 @@ export class SqlDb {
     }
     public async getEddyPricelist(): Promise<EddyPricelist[]> {
         return this._getMany<EddyPricelist>('EddyPricelist', `ProductStatus IS NULL`)
+    }
+    public async getVwEddyPricelist(): Promise<VwEddyPricelist[]> {
+        return this._getMany<VwEddyPricelist>('VwEddyPricelist', `ProductStatus IS NULL`)
+    }
+    public async getVwEddyPricelistByPartNumber(partNumber: string): Promise<VwEddyPricelist[]> {
+        return this._getMany<VwEddyPricelist>('VwEddyPricelist', `PartNumber='${partNumber}' AND ProductStatus IS NULL`)
     }
     public async createCategory(input: Category): Promise<boolean> {
         return new Promise(async(resolve, reject) => {

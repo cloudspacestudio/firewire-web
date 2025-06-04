@@ -278,7 +278,55 @@ export class FieldwireDevices {
                     }
                 })
             }
-        }
+        },
+        // Get View Eddy Pricelist combined with Eddy Products
+        {
+            method: 'get',
+            path: '/api/fieldwire/vweddypricelist',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getVwEddyPricelist()
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get View Eddy Pricelist combined with Eddy Products by Part Number
+        {
+            method: 'get',
+            path: '/api/fieldwire/vweddypricelist/:partNumber',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const partNumber = req.params.partNumber
+                        if (!partNumber) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing partNumber parameter'
+                            })
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getVwEddyPricelistByPartNumber(partNumber)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
 
     ]
 

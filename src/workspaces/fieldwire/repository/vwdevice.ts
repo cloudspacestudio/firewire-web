@@ -17,4 +17,6 @@ export interface VwDevice {
     createby: string
     updateat: Date
     updateby: string
+    attributeCount?: number
+    subTaskCount?: number
 }

@@ -24,7 +24,9 @@ export class FieldwireTasks {
         FieldwireTasks.createProjectTask(),
         FieldwireTasks.deleteTasks(),
         FieldwireTasks.seedFromTestDevices(),
-        FieldwireTasks.getFloorplanTasks()
+        FieldwireTasks.getFloorplanTasks(),
+        FieldwireTasks.taskFilterByStatus(),
+        FieldwireTasks.getTaskDetail()
     ]
 
     static getProjectTasks() {
@@ -93,6 +95,40 @@ export class FieldwireTasks {
         }
     }
 
+    static getTaskDetail() {
+        return {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/tasks/:taskId',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        const taskId = req.params.taskId
+                        if (!taskId) {
+                            res.status(400).json({
+                                message: `Invalid Payload: Missing taskId parameter`
+                            })
+                        }
+                        const result = await fieldwire.taskDetail(projectId, taskId)
+                        res.status(200).json(result)
+                        return resolve(true)
+                    } catch (err: Error|any) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                        return resolve(err)
+                    }
+                })
+            }
+        }
+    }
+
     static getProjectTaskTypeAttributes() {
         return {
             method: 'get',
@@ -122,6 +158,51 @@ export class FieldwireTasks {
             }
         }
     }
+
+    static taskFilterByStatus() {
+        return {
+            method: 'post',
+            path: '/api/fieldwire/projects/:projectId/taskfilterbystatus',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                            res.status(404).json({
+                                message: `Invalid Project Id: ${projectId} is not an editable project id`
+                            })
+                        }
+                        const statusId = req.body.statusId
+                        const startDateParam = req.body.startDate
+                        const endDateParam = req.body.endDate
+                        if (!statusId || !startDateParam || !endDateParam) {
+                            return res.status(400).json({
+                                message: 'Bad Request'
+                            })
+                        }
+                        const startDate = new Date(startDateParam)
+                        const endDate = new Date(endDateParam)
+                        const result = await fieldwire.taskFilterByStatus(projectId, statusId, startDate, endDate)
+                        res.status(200).json(result)
+                        return resolve(true)
+                    } catch (err: Error|any) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                        return resolve(err)
+                    }
+                })
+            }
+        }
+    }
+
+
 
     static seedFromTestDevices() {
         return {

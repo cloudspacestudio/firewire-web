@@ -198,8 +198,15 @@ export class FieldwireSDK {
     public async accountProjects(): Promise<AccountProjectSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`account/projects`)
-                return resolve(result)
+                const result = await this.get(`account/projects`, {"Fieldwire-Filter": "active"})
+                const output: AccountProjectSchema[] = []
+                for(let i = 0; i < result.length; i++) {
+                    const record = result[i]
+                    if (FieldwireSDK.editableProjects.indexOf(record.id)>=0) {
+                        output.push(record)
+                    }
+                }
+                return resolve(output)
             } catch (err) {
                 return reject(err)
             }
@@ -403,6 +410,16 @@ export class FieldwireSDK {
             }
         });
     }
+    public async taskDetail(projectId: string, taskId: string): Promise<any[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/tasks/${taskId}`)
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     public async projectFloorplanTasks(projectId: string, floorplanId: string): Promise<ProjectTaskSchema[]> {
         return new Promise(async(resolve, reject) => {
             try {
@@ -539,6 +556,21 @@ export class FieldwireSDK {
             }
         });
     }
+    public async taskFilterByStatus(projectId: string, statusId: string, startDate: Date, endDate: Date): Promise<ProjectTaskSchema[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const startString = startDate.toISOString().split('T')[0]
+                const endString = endDate.toISOString().split('T')[0]
+                const result = await this.get(`projects/${projectId}/tasks/filter_by_status?end_date=${endString}&start_date=${startString}&status_id=${statusId}`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    
     // #endregion
 
     // #region Task Importer

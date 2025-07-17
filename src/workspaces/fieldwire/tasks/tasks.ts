@@ -188,7 +188,7 @@ export class FieldwireTasks {
                         }
                         const startDate = new Date(startDateParam)
                         const endDate = new Date(endDateParam)
-                        const result = await fieldwire.taskFilterByStatus(projectId, statusId, startDate, endDate)
+                        const result = await fieldwire.taskFilterByStatus(projectId, statusId, startDateParam, endDateParam)
                         res.status(200).json(result)
                         return resolve(true)
                     } catch (err: Error|any) {

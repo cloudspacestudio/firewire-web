@@ -31,6 +31,18 @@ import { PositionResolver } from './tasks/resolvers/position.resolver';
 import { SubTaskResolver } from './tasks/resolvers/subtask.resolver';
 import { MaterialSubTask } from './repository/materialsubtask';
 import { TaskRelationSchema } from './schemas/taskrelation.schema';
+import { FormTemplate } from './schemas/form.template';
+import { FormTemplateStatus } from './schemas/form.templatestatus';
+import { FieldwireForm } from './schemas/fieldwire.form';
+import { CreateFormSchema } from './schemas/createform.schema';
+import { DailyReportSchema } from './schemas/dailyreport.schema';
+import { FormSection } from './schemas/form.section';
+import { FormSectionRecord } from './schemas/form.sectionrecord';
+import { FormSectionRecordValue } from './schemas/form.sectionrecordvalue';
+import { FormSectionRecordInput } from './schemas/form.sectionrecordinput';
+import { DataTypeSchema } from './schemas/datatype.schema';
+import { CreateFormRecordValueSchema } from './schemas/createformrecordvalue.schema';
+import { DataTypeValueSchema } from './schemas/datatype.value.schema';
 
 const apiKey = process.env.fieldwire
 const defaultMaterialLabor = 2
@@ -556,12 +568,12 @@ export class FieldwireSDK {
             }
         });
     }
-    public async taskFilterByStatus(projectId: string, statusId: string, startDate: Date, endDate: Date): Promise<ProjectTaskSchema[]> {
+    public async taskFilterByStatus(projectId: string, statusId: string, startDate: string, endDate: string): Promise<ProjectTaskSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
-                const startString = startDate.toISOString().split('T')[0]
-                const endString = endDate.toISOString().split('T')[0]
-                const result = await this.get(`projects/${projectId}/tasks/filter_by_status?end_date=${endString}&start_date=${startString}&status_id=${statusId}`, {
+                //const startString = startDate.toISOString().split('T')[0]
+                //const endString = endDate.toISOString().split('T')[0]
+                const result = await this.get(`projects/${projectId}/tasks/filter_by_status?end_date=${endDate}&start_date=${startDate}&status_id=${statusId}`, {
                     'Fieldwire-Filter': 'active'
                 })
                 return resolve(result)
@@ -979,6 +991,252 @@ export class FieldwireSDK {
             }
         })
     }
+    // #endregion
+
+    // #region Forms
+    public async projectFormTemplates(projectId: string): Promise<FormTemplate[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/form_templates`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async projectDataTypes(projectId: string): Promise<DataTypeSchema[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/data_types`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async projectFormTemplateStatuses(projectId: string): Promise<FormTemplateStatus[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/form_template_form_statuses`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async projectForms(projectId: string): Promise<FieldwireForm[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/forms`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async formSectionsForForm(projectId: string, formId: string): Promise<FormSection[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result: FormSection[] = await this.get(`projects/${projectId}/form_sections`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                //console.dir(result)
+                const output = result.filter(s => s.form_id===formId)
+                return resolve(output)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async formSectionRecordsForSection(projectId: string, sectionId: string): Promise<FormSectionRecord[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result: FormSectionRecord[] = await this.get(`projects/${projectId}/form_section_records`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                const output = result.filter(s => s.form_section_id===sectionId)
+                return resolve(output)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async formSectionRecordValuesForSectionRecord(projectId: string, sectionRecordId: string): Promise<FormSectionRecordValue[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result: FormSectionRecordValue[] = await this.get(`projects/${projectId}/form_section_record_values`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                const output = result.filter(s => s.form_section_record_id===sectionRecordId)
+                return resolve(output)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async formSectionRecordInputsForSectionRecord(projectId: string, sectionRecordId: string): Promise<FormSectionRecordInput[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result: FormSectionRecordInput[] = await this.get(`projects/${projectId}/form_section_record_inputs`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                const output = result.filter(s => s.form_section_record_id===sectionRecordId)
+                return resolve(output)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async dataTypeById(projectId: string, dataTypeId: string): Promise<DataTypeSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result: DataTypeSchema = await this.get(`projects/${projectId}/data_types/${dataTypeId}`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+
+    public async createProjectForm(projectId: string, input: CreateFormSchema): Promise<FieldwireForm> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const result = await this.post(`projects/${projectId}/forms`, input, {})
+                if (!result) {
+                    throw new Error(`Invalid Form Creation Response`)
+                }
+                if (result instanceof Error) {
+                    throw result
+                }
+                const newFormId = result.id
+                const generateResult = await this.post(`projects/${projectId}/forms/${newFormId}/generate`, {}, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });
+    }
+    public async createFormSectionRecordValue(projectId: string, input: CreateFormRecordValueSchema): Promise<FormSectionRecordValue> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const result = await this.post(`projects/${projectId}/form_section_record_values`, input, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });
+    }
+    public async createDataTypeValue(projectId: string, input: DataTypeValueSchema): Promise<DataTypeValueSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const result = await this.post(`projects/${projectId}/data_type_values`, input, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });
+    }
+    
+    public async loadDailyReport(projectId: string, input: DailyReportSchema): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const sections = await this.formSectionsForForm(projectId, input.form_id)
+                if (!sections || sections.length <= 0) {
+                    console.dir(sections)
+                    throw new Error(`Unable to retrieve form sections for form ${input.form_id}`)
+                }
+                const section = sections.find(s => s.name.toLowerCase()==='work log')
+                if (!section) {
+                    throw new Error(`Cannot determine Work Log section for form ${input.form_id}`)
+                }
+
+                const formSectionRecords = await this.formSectionRecordsForSection(projectId, section.id)
+                if (!formSectionRecords || formSectionRecords.length <= 0) {
+                    throw new Error(`Unable to retrieve form section records for form ${input.form_id}`)
+                }
+                const sectionRecord = formSectionRecords.find(s => s.name.toLowerCase()==='work log')
+                if (!sectionRecord) {
+                    throw new Error(`Cannot determine Work Log section record for form ${input.form_id}`)
+                }
+                const dataTypes: DataTypeSchema[] = await this.projectDataTypes(projectId)
+                // We are hardcoding new records each time
+                // TODO: Get form_section_record values and test each row to see if already on form
+
+                // For each work log entry - create sectoin record input
+                for(let i = 0; i < input.worklog.length; i++) {
+                    const worklogentry = input.worklog[i]
+                    const sectionRecordValueResult = await this.createFormSectionRecordValue(projectId, {
+                        creator_user_id: 1684559,
+                        last_editor_user_id: 1684559,
+                        form_section_record_id: sectionRecord.id,
+                        ordinal: 1
+                    })
+                    console.log(`Result from createFormSectionRecordValue`)
+                    console.dir(sectionRecordValueResult)
+                    
+                    const sectionRecordInputs = await this.formSectionRecordInputsForSectionRecord(projectId, sectionRecordValueResult.form_section_record_id)
+                    console.log(`Result from formSectionRecordInputsForSectionRecord`)
+                    console.dir(sectionRecordInputs)
+                    for (let x = 0; x < sectionRecordInputs.length; x++) {
+                        const sectionRecordInput = sectionRecordInputs[x]
+                        const dataType = dataTypes.find(s => s.id===sectionRecordInput.data_type_id)
+                        if (dataType) {
+                            console.dir(dataType)
+                            let data: DataTypeValueSchema = {
+                                creator_user_id: 1684559,
+                                last_editor_user_id: 1684559,
+                                data_type_id: dataType.id,
+                            }
+                            if (dataType.kind==='string') {
+                                data.string_value=worklogentry.Trade
+                            }
+                            if (dataType.kind==='decimal') {
+                                data.decimal_value=worklogentry.Hours
+                            }
+                            if (dataType.kind==='bigint') {
+                                data.bigint_value=worklogentry.Quantity
+                            }
+                            console.log(`Setting string value ${worklogentry.Trade}`)
+                            await this.createDataTypeValue(projectId, data)
+                        }
+                    }
+
+                }
+
+                return resolve(input)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        });
+    }
+
+
     // #endregion
 
     // #region AWS

@@ -197,7 +197,7 @@ export class FieldwireSDK {
         let output = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'Fieldwire-Version': '2024-11-01',
+            'Fieldwire-Version': '2025-07-01',
             'Authorization': `Bearer ${this._jwtToken}`
         }
         if (additionalHeaders) {
@@ -1194,7 +1194,6 @@ export class FieldwireSDK {
                 }
                 const sections = await this.formSectionsForForm(projectId, input.form_id)
                 if (!sections || sections.length <= 0) {
-                    console.dir(sections)
                     throw new Error(`Unable to retrieve form sections for form ${input.form_id}`)
                 }
                 const section = sections.find(s => s.name.toLowerCase()==='work log')
@@ -1223,17 +1222,13 @@ export class FieldwireSDK {
                         form_section_record_id: sectionRecord.id,
                         ordinal: 1
                     })
-                    console.log(`Result from createFormSectionRecordValue`)
-                    console.dir(sectionRecordValueResult)
+                    await Utils.sleep(1000)
                     
                     const sectionRecordInputs = await this.formSectionRecordInputsForSectionRecord(projectId, sectionRecordValueResult.form_section_record_id)
-                    console.log(`Result from formSectionRecordInputsForSectionRecord`)
-                    console.dir(sectionRecordInputs)
                     for (let x = 0; x < sectionRecordInputs.length; x++) {
                         const sectionRecordInput = sectionRecordInputs[x]
                         const dataType = dataTypes.find(s => s.id===sectionRecordInput.data_type_id)
                         if (dataType) {
-                            console.dir(dataType)
                             let data: DataTypeValueSchema = {
                                 creator_user_id: 1684559,
                                 last_editor_user_id: 1684559,
@@ -1262,7 +1257,6 @@ export class FieldwireSDK {
             }
         });
     }
-
 
     // #endregion
 

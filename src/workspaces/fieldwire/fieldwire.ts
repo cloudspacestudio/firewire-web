@@ -43,6 +43,7 @@ import { FormSectionRecordInput } from './schemas/form.sectionrecordinput';
 import { DataTypeSchema } from './schemas/datatype.schema';
 import { CreateFormRecordValueSchema } from './schemas/createformrecordvalue.schema';
 import { DataTypeValueSchema } from './schemas/datatype.value.schema';
+import { TaskRelatedSchema } from './schemas/taskrelated.schema';
 
 const apiKey = process.env.fieldwire
 const defaultMaterialLabor = 2
@@ -407,6 +408,7 @@ export class FieldwireSDK {
             }
         });
     }
+    
     // #endregion
 
     // #region Tasks
@@ -582,6 +584,31 @@ export class FieldwireSDK {
             }
         });
     }
+    public async projectTaskRelations(projectId: string): Promise<TaskTypeAttributeSchema[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/task_relations`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async taskRelatedTasks(projectId: string, taskId: string): Promise<TaskRelatedSchema[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/tasks/${taskId}/related`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+
     
     // #endregion
 

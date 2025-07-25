@@ -26,7 +26,8 @@ export class FieldwireTasks {
         FieldwireTasks.seedFromTestDevices(),
         FieldwireTasks.getFloorplanTasks(),
         FieldwireTasks.taskFilterByStatus(),
-        FieldwireTasks.getTaskDetail()
+        FieldwireTasks.getTaskDetail(),
+        FieldwireTasks.getRelatedTasks()
     ]
 
     static getProjectTasks() {
@@ -83,6 +84,35 @@ export class FieldwireTasks {
                         res.status(200).json({
                             rows: result
                         })
+                        return resolve(true)
+                    } catch (err: Error|any) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                        return resolve(err)
+                    }
+                })
+            }
+        }
+    }
+
+    static getRelatedTasks() {
+        return {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/tasks/:taskId/related',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        const taskId = req.params.taskId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        const result = await fieldwire.taskRelatedTasks(projectId, taskId)
+                        res.status(200).json(result)
                         return resolve(true)
                     } catch (err: Error|any) {
                         res.status(500).json({

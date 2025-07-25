@@ -343,6 +343,32 @@ export class FieldwireProjects {
                     }
                 })
             }
+        },
+        // Get Project Task Relations
+        {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/task_relations',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        const result = await fieldwire.projectTaskRelations(projectId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
         }
     ]
 

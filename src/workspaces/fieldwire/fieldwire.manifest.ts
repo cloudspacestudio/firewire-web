@@ -41,6 +41,7 @@ export default class FieldwireManifest extends BaseManifest {
                     const sql: MsSqlServerDb = app.locals.sqlserver
                     try {
                         const initResult = await sql.init()
+                        sql.query(`SELECT TOP 1 FROM devices`)
                         console.log(`miSSion.webserver: sqlserver: keepalive`)
                     } catch (err) {
                         console.error(err)

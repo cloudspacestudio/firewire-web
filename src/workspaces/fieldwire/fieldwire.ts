@@ -137,7 +137,7 @@ export class FieldwireSDK {
                 const url = `${this._regionUrl}${path}`
                 const headers = this._buildHeaders(additionalHeaders)
                 console.log(`POST: ${url}`)
-                console.log(`HEADERS: ${JSON.stringify(headers)}`)
+                //console.log(`HEADERS: ${JSON.stringify(headers)}`)
                 console.log(`BODY: ${JSON.stringify(body, null, 1)}`)
                 const response = await fetch(url, {
                     method: 'POST',
@@ -1033,6 +1033,30 @@ export class FieldwireSDK {
             }
         });
     }
+    public async dataTypeById(projectId: string, dataTypeId: string): Promise<DataTypeSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result: DataTypeSchema = await this.get(`projects/${projectId}/data_types/${dataTypeId}`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    public async projectFormFull(projectId: string, formId: string): Promise<FormTemplate[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/forms/${formId}/full`, {
+                    'Fieldwire-Filter': 'active'
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
     public async projectDataTypes(projectId: string): Promise<DataTypeSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
@@ -1122,18 +1146,7 @@ export class FieldwireSDK {
             }
         });
     }
-    public async dataTypeById(projectId: string, dataTypeId: string): Promise<DataTypeSchema> {
-        return new Promise(async (resolve, reject) => {
-            try {
-                const result: DataTypeSchema = await this.get(`projects/${projectId}/data_types/${dataTypeId}`, {
-                    'Fieldwire-Filter': 'active'
-                })
-                return resolve(result)
-            } catch (err) {
-                return reject(err)
-            }
-        });
-    }
+
 
     public async createProjectForm(projectId: string, input: CreateFormSchema): Promise<FieldwireForm> {
         return new Promise(async (resolve, reject) => {

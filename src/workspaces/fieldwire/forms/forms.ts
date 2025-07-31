@@ -81,6 +81,24 @@ export class FieldwireForms {
                 })
             }
         },
+        {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/forms/:formId/full',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        const result = await fieldwire.projectFormFull(projectId, req.params.formId)
+                        return res.status(200).json(result)
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
         FieldwireForms.createForm(),
         FieldwireForms.loadDailyReport()
     ]

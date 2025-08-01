@@ -44,6 +44,7 @@ import { DataTypeSchema } from './schemas/datatype.schema';
 import { CreateFormRecordValueSchema } from './schemas/createformrecordvalue.schema';
 import { DataTypeValueSchema } from './schemas/datatype.value.schema';
 import { TaskRelatedSchema } from './schemas/taskrelated.schema';
+import { FormSectionRecordInputValueSchema } from './schemas/formsectionrecordinputvalue.schema';
 
 const apiKey = process.env.fieldwire
 const defaultMaterialLabor = 2
@@ -1198,6 +1199,34 @@ export class FieldwireSDK {
             }
         });
     }
+    public async getFormSectionRecordInputValues(projectId: string): Promise<FormSectionRecordInputValueSchema> {
+        return new Promise(async(resolve, reject) => {
+            try {
+
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        })
+    }
+    public async createFormSectionRecordInputValues(projectId: string, input: FormSectionRecordInputValueSchema): Promise<any> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                // form_section_record_input_values
+                // input.value_id is the id of the createDataTypeValue POST
+                // input.value_type is DataTypeValue
+
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const result = await this.post(`projects/${projectId}/form_section_record_input_values`, input, {})
+                return resolve(result)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        })
+    }
     
     public async loadDailyReport(projectId: string, input: DailyReportSchema): Promise<any> {
         return new Promise(async (resolve, reject) => {
@@ -1222,6 +1251,8 @@ export class FieldwireSDK {
                 if (!sectionRecord) {
                     throw new Error(`Cannot determine Work Log section record for form ${input.form_id}`)
                 }
+                console.log(`sectionRecord`)
+                console.dir(sectionRecord)
                 const dataTypes: DataTypeSchema[] = await this.projectDataTypes(projectId)
                 // We are hardcoding new records each time
                 // TODO: Get form_section_record values and test each row to see if already on form
@@ -1229,17 +1260,21 @@ export class FieldwireSDK {
                 // For each work log entry - create sectoin record input
                 for(let i = 0; i < input.worklog.length; i++) {
                     const worklogentry = input.worklog[i]
-                    const sectionRecordValueResult = await this.createFormSectionRecordValue(projectId, {
+                    const sectionRecordValueResult: FormSectionRecordValue = await this.createFormSectionRecordValue(projectId, {
                         creator_user_id: 1684559,
                         last_editor_user_id: 1684559,
                         form_section_record_id: sectionRecord.id,
                         ordinal: 1
                     })
                     await Utils.sleep(1000)
+                    // use sectionRecordValueResult.id as form_section_record_value_id
+                    //console.log(`sectionRecordValueResult`)
+                    //console.dir(sectionRecordValueResult)
                     
                     const sectionRecordInputs = await this.formSectionRecordInputsForSectionRecord(projectId, sectionRecordValueResult.form_section_record_id)
                     for (let x = 0; x < sectionRecordInputs.length; x++) {
-                        const sectionRecordInput = sectionRecordInputs[x]
+                        const sectionRecordInput: FormSectionRecordInput = sectionRecordInputs[x]
+                        // use sectionRecordInput.form_section_record_input_id
                         const dataType = dataTypes.find(s => s.id===sectionRecordInput.data_type_id)
                         if (dataType) {
                             let data: DataTypeValueSchema = {
@@ -1256,8 +1291,13 @@ export class FieldwireSDK {
                             if (dataType.kind==='bigint') {
                                 data.bigint_value=worklogentry.Quantity
                             }
-                            console.log(`Setting string value ${worklogentry.Trade}`)
-                            await this.createDataTypeValue(projectId, data)
+                            const dataTypeValueResult = await this.createDataTypeValue(projectId, data)
+                            await this.createFormSectionRecordInputValues(projectId, {
+                                form_section_record_input_id: sectionRecordValueResult.id, // this is fine
+                                form_section_record_value_id: sectionRecordInput.id||'', // cannot find this value?
+                                value_id: dataTypeValueResult.id||'',
+                                value_type: 'DataTypeValue'
+                            })
                         }
                     }
 

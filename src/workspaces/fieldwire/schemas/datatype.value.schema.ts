@@ -5,4 +5,5 @@ export interface DataTypeValueSchema {
     bigint_value?: number
     string_value?: string
     decimal_value?: number
+    id?: string
 }

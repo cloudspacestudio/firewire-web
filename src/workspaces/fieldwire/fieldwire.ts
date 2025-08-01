@@ -1049,7 +1049,7 @@ export class FieldwireSDK {
     public async projectFormFull(projectId: string, formId: string): Promise<FormTemplate[]> {
         return new Promise(async (resolve, reject) => {
             try {
-                const result = await this.get(`projects/${projectId}/forms/${formId}/full`, {
+                const result = await this.get(`projects/${projectId}/forms/${formId}/structure`, {
                     'Fieldwire-Filter': 'active'
                 })
                 return resolve(result)
@@ -1292,10 +1292,19 @@ export class FieldwireSDK {
                                 data.bigint_value=worklogentry.Quantity
                             }
                             const dataTypeValueResult = await this.createDataTypeValue(projectId, data)
+                            // await this.createFormSectionRecordInputValues(projectId, {
+                            //     form_section_record_input_id: sectionRecordValueResult.id, // this is fine
+                            //     form_section_record_value_id: sectionRecordInput.id||'', // cannot find this value?
+                            //     value_id: dataTypeValueResult.id||'',
+                            //     value_type: 'DataTypeValue'
+                            // })
+                            console.dir(sectionRecordValueResult)
                             await this.createFormSectionRecordInputValues(projectId, {
-                                form_section_record_input_id: sectionRecordValueResult.id, // this is fine
-                                form_section_record_value_id: sectionRecordInput.id||'', // cannot find this value?
+                                form_section_record_input_id: sectionRecordInput.id, // this is fine
+                                form_section_record_value_id: sectionRecordValueResult.id||'', // cannot find this value?
                                 value_id: dataTypeValueResult.id||'',
+                                creator_user_id: 1684559,
+                                last_editor_user_id: 1684559,
                                 value_type: 'DataTypeValue'
                             })
                         }

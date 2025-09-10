@@ -1138,7 +1138,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result: FormSectionRecordInput[] = await this.get(`projects/${projectId}/form_section_record_inputs`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 console.log(`Searching formSectionRecordInputsForSectionRecord ${result.length} records for form_section_record_id of ${sectionRecordId}`)
                 const output = result.filter(s => s.form_section_record_id===sectionRecordId)

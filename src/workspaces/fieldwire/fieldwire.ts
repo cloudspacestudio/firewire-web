@@ -1231,6 +1231,7 @@ export class FieldwireSDK {
     public async loadDailyReport(projectId: string, input: DailyReportSchema): Promise<any> {
         return new Promise(async (resolve, reject) => {
             try {
+                const tableName = `Fieldwire Task Summary`
                 if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
                     throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
                 }
@@ -1238,7 +1239,7 @@ export class FieldwireSDK {
                 if (!sections || sections.length <= 0) {
                     throw new Error(`Unable to retrieve form sections for form ${input.form_id}`)
                 }
-                const section = sections.find(s => s.name.toLowerCase()==='work log')
+                const section = sections.find(s => s.name.toLowerCase()===tableName.toLowerCase())
                 if (!section) {
                     throw new Error(`Cannot determine Work Log section for form ${input.form_id}`)
                 }
@@ -1249,7 +1250,7 @@ export class FieldwireSDK {
                 }
                 const sectionRecord = formSectionRecords.find(s => s.name.toLowerCase()==='work log')
                 if (!sectionRecord) {
-                    throw new Error(`Cannot determine Work Log section record for form ${input.form_id}`)
+                    throw new Error(`Cannot determine Work Log section record for form ${input.form_id}: Looking for ${tableName}`)
                 }
                 console.log(`sectionRecord`)
                 console.dir(sectionRecord)

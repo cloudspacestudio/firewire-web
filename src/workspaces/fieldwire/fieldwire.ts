@@ -1138,9 +1138,12 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result: FormSectionRecordInput[] = await this.get(`projects/${projectId}/form_section_record_inputs`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
+                console.log(`Searching formSectionRecordInputsForSectionRecord ${result.length} records for form_section_record_id of ${sectionRecordId}`)
                 const output = result.filter(s => s.form_section_record_id===sectionRecordId)
+                console.log(`Search in formSectionRecordInputsForSectionRecord found ${output.length} records`)
                 return resolve(output)
             } catch (err) {
                 return reject(err)
@@ -1248,6 +1251,7 @@ export class FieldwireSDK {
                 if (!formSectionRecords || formSectionRecords.length <= 0) {
                     throw new Error(`Unable to retrieve form section records for form ${input.form_id}`)
                 }
+                // #endregion
                 const sectionRecord = formSectionRecords.find(s => s.name.toLowerCase()==='work log')
                 if (!sectionRecord) {
                     throw new Error(`Cannot determine Work Log section record for form ${input.form_id}: Looking for ${tableName}`)
@@ -1258,56 +1262,78 @@ export class FieldwireSDK {
                 // We are hardcoding new records each time
                 // TODO: Get form_section_record values and test each row to see if already on form
 
-                // For each work log entry - create sectoin record input
+                // For each work log entry - create section record input
                 for(let i = 0; i < input.worklog.length; i++) {
+                    // Create Form Table Row
                     const worklogentry = input.worklog[i]
-                    const sectionRecordValueResult: FormSectionRecordValue = await this.createFormSectionRecordValue(projectId, {
-                        creator_user_id: 1684559,
-                        last_editor_user_id: 1684559,
-                        form_section_record_id: sectionRecord.id,
-                        ordinal: 1
-                    })
-                    await Utils.sleep(1000)
-                    // use sectionRecordValueResult.id as form_section_record_value_id
-                    //console.log(`sectionRecordValueResult`)
-                    //console.dir(sectionRecordValueResult)
-                    
-                    const sectionRecordInputs = await this.formSectionRecordInputsForSectionRecord(projectId, sectionRecordValueResult.form_section_record_id)
-                    for (let x = 0; x < sectionRecordInputs.length; x++) {
-                        const sectionRecordInput: FormSectionRecordInput = sectionRecordInputs[x]
-                        // use sectionRecordInput.form_section_record_input_id
-                        const dataType = dataTypes.find(s => s.id===sectionRecordInput.data_type_id)
-                        if (dataType) {
-                            let data: DataTypeValueSchema = {
-                                creator_user_id: 1684559,
-                                last_editor_user_id: 1684559,
-                                data_type_id: dataType.id,
+                    // Limit run for debugging to one row
+                    if (worklogentry.Trade) { //}==='Cable') {
+                        const formSectionRecordValueBody = {
+                            creator_user_id: 1684559,
+                            last_editor_user_id: 1684559,
+                            form_section_record_id: sectionRecord.id,
+                            ordinal: 1
+                        }
+                        const sectionRecordValueResult: FormSectionRecordValue = await this.createFormSectionRecordValue(projectId, formSectionRecordValueBody)
+                        await Utils.sleep(1000)
+                        // use sectionRecordValueResult.id as form_section_record_value_id
+                        console.log(`createFormSectionRecordValue: Row`)
+                        console.dir(formSectionRecordValueBody)
+                        console.dir(sectionRecordValueResult)
+                        
+                        // Columns
+                        const sectionRecordInputs = await this.formSectionRecordInputsForSectionRecord(projectId, sectionRecordValueResult.form_section_record_id)
+                        //const sectionRecordInputs = await this.formSectionRecordInputsForSectionRecord(projectId, sectionRecord.id)
+                        console.dir(`formSectionRecordInputsForSectionRecord: Columns`)
+                        console.dir(sectionRecord.id)
+                        console.dir(sectionRecordInputs)
+                        await Utils.sleep(1000)
+                        for (let x = 0; x < sectionRecordInputs.length; x++) {
+                            const sectionRecordInput: FormSectionRecordInput = sectionRecordInputs[x]
+                            // use sectionRecordInput.form_section_record_input_id
+                            const dataType = dataTypes.find(s => s.id===sectionRecordInput.data_type_id)
+                            if (dataType) {
+                                let data: DataTypeValueSchema = {
+                                    creator_user_id: 1684559,
+                                    last_editor_user_id: 1684559,
+                                    data_type_id: dataType.id,
+                                }
+                                if (dataType.kind==='string') {
+                                    data.string_value=worklogentry.Trade
+                                }
+                                if (dataType.kind==='decimal') {
+                                    data.decimal_value=worklogentry.Hours
+                                }
+                                if (dataType.kind==='bigint') {
+                                    data.bigint_value=worklogentry.Quantity
+                                }
+                                const dataTypeValueResult = await this.createDataTypeValue(projectId, data)
+                                console.log(`createDataTypeValue: Data Value Placeholder`)
+                                console.dir(data)
+                                console.dir(dataTypeValueResult)
+
+                                const createFormSectionRecordInputValueBody = {
+                                    form_section_record_input_id: sectionRecordInput.id, // this is fine
+                                    form_section_record_value_id: sectionRecordValueResult.id||'', // cannot find this value?
+                                    value_id: dataTypeValueResult.id||'',
+                                    creator_user_id: 1684559,
+                                    last_editor_user_id: 1684559,
+                                    value_type: 'DataTypeValue'
+                                }
+                                // const createFormSectionRecordInputValueBody = {
+                                //     form_section_record_input_id: sectionRecordValueResult.id, // this is fine
+                                //     form_section_record_value_id: sectionRecordInput.id||'', // cannot find this value?
+                                //     value_id: dataTypeValueResult.id||'',
+                                //     creator_user_id: 1684559,
+                                //     last_editor_user_id: 1684559,
+                                //     value_type: 'DataTypeValue'
+                                // })
+                                const mapValueToColumnResult = await this.createFormSectionRecordInputValues(projectId, createFormSectionRecordInputValueBody)
+                                console.log(`createFormSectionRecordInputValues: Link Data Value to Column`)
+                                console.dir(createFormSectionRecordInputValueBody)
+                                console.dir(mapValueToColumnResult)
+                                await Utils.sleep(200)
                             }
-                            if (dataType.kind==='string') {
-                                data.string_value=worklogentry.Trade
-                            }
-                            if (dataType.kind==='decimal') {
-                                data.decimal_value=worklogentry.Hours
-                            }
-                            if (dataType.kind==='bigint') {
-                                data.bigint_value=worklogentry.Quantity
-                            }
-                            const dataTypeValueResult = await this.createDataTypeValue(projectId, data)
-                            // await this.createFormSectionRecordInputValues(projectId, {
-                            //     form_section_record_input_id: sectionRecordValueResult.id, // this is fine
-                            //     form_section_record_value_id: sectionRecordInput.id||'', // cannot find this value?
-                            //     value_id: dataTypeValueResult.id||'',
-                            //     value_type: 'DataTypeValue'
-                            // })
-                            console.dir(sectionRecordValueResult)
-                            await this.createFormSectionRecordInputValues(projectId, {
-                                form_section_record_input_id: sectionRecordInput.id, // this is fine
-                                form_section_record_value_id: sectionRecordValueResult.id||'', // cannot find this value?
-                                value_id: dataTypeValueResult.id||'',
-                                creator_user_id: 1684559,
-                                last_editor_user_id: 1684559,
-                                value_type: 'DataTypeValue'
-                            })
                         }
                     }
 

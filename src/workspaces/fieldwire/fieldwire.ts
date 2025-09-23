@@ -1026,7 +1026,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/form_templates`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 return resolve(result)
             } catch (err) {
@@ -1062,7 +1063,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/data_types`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 return resolve(result)
             } catch (err) {
@@ -1074,7 +1076,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/form_template_form_statuses`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 return resolve(result)
             } catch (err) {
@@ -1086,7 +1089,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/forms`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 return resolve(result)
             } catch (err) {
@@ -1098,7 +1102,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result: FormSection[] = await this.get(`projects/${projectId}/form_sections`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 //console.dir(result)
                 const output = result.filter(s => s.form_id===formId)
@@ -1112,7 +1117,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result: FormSectionRecord[] = await this.get(`projects/${projectId}/form_section_records`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 const output = result.filter(s => s.form_section_id===sectionId)
                 return resolve(output)
@@ -1125,7 +1131,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result: FormSectionRecordValue[] = await this.get(`projects/${projectId}/form_section_record_values`, {
-                    'Fieldwire-Filter': 'active'
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 const output = result.filter(s => s.form_section_record_id===sectionRecordId)
                 return resolve(output)
@@ -1249,11 +1256,12 @@ export class FieldwireSDK {
 
                 const formSectionRecords = await this.formSectionRecordsForSection(projectId, section.id)
                 if (!formSectionRecords || formSectionRecords.length <= 0) {
-                    throw new Error(`Unable to retrieve form section records for form ${input.form_id}`)
+                    throw new Error(`Unable to retrieve form section records for form ${input.form_id} section ${section.id}`)
                 }
                 // #endregion
-                const sectionRecord = formSectionRecords.find(s => s.name.toLowerCase()==='work log')
+                const sectionRecord = formSectionRecords.find(s => s.name.toLowerCase()===tableName.toLowerCase())
                 if (!sectionRecord) {
+                    //console.dir(formSectionRecords)
                     throw new Error(`Cannot determine Work Log section record for form ${input.form_id}: Looking for ${tableName}`)
                 }
                 console.log(`sectionRecord`)
@@ -1291,7 +1299,14 @@ export class FieldwireSDK {
                         for (let x = 0; x < sectionRecordInputs.length; x++) {
                             const sectionRecordInput: FormSectionRecordInput = sectionRecordInputs[x]
                             // use sectionRecordInput.form_section_record_input_id
+                            console.log(`******************************************`)
+                            console.log(`Looking for data type value ${sectionRecordInput.data_type_id}`)
                             const dataType = dataTypes.find(s => s.id===sectionRecordInput.data_type_id)
+                            if (!dataType) {
+                                console.log(`Could not find data type ${sectionRecordInput.data_type_id}`)
+                                console.log(`Data Types Length: ${dataTypes.length}`)
+                                console.log(`******************************************`)
+                            }
                             if (dataType) {
                                 let data: DataTypeValueSchema = {
                                     creator_user_id: 1684559,

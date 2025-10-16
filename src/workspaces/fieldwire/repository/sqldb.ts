@@ -15,6 +15,7 @@ import { VwDevice } from './vwdevice';
 import { VwMaterial } from './vwmaterial';
 import { VwDeviceMaterial } from './vwdevicematerial';
 import { VwEddyPricelist } from './vwEddyPricelist';
+import { CategoryLaborSchema } from '../schemas/categorylabor.schema';
 
 export class SqlDb {
 
@@ -35,6 +36,9 @@ export class SqlDb {
     }
     public async getVendors(): Promise<Vendor[]> {
         return this._getMany<Vendor>('vendors')
+    }
+    public async getCategoryLabors(): Promise<CategoryLaborSchema[]> {
+        return this._getMany<CategoryLaborSchema>('categoryLabors')
     }
     public async getMaterials(): Promise<Material[]> {
         return this._getMany<Material>('materials')

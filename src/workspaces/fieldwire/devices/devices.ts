@@ -327,6 +327,27 @@ export class FieldwireDevices {
                 })
             }
         },
+        // Get Category Labor
+        {
+            method: 'get',
+            path: '/api/fieldwire/categorylabors',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await sqldb.getCategoryLabors()
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
 
     ]
 

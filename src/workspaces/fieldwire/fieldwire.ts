@@ -45,6 +45,7 @@ import { CreateFormRecordValueSchema } from './schemas/createformrecordvalue.sch
 import { DataTypeValueSchema } from './schemas/datatype.value.schema';
 import { TaskRelatedSchema } from './schemas/taskrelated.schema';
 import { FormSectionRecordInputValueSchema } from './schemas/formsectionrecordinputvalue.schema';
+import { ProjectStatusSchema } from './schemas/projectstatus.schema';
 
 const apiKey = process.env.fieldwire
 const defaultMaterialLabor = 2
@@ -301,7 +302,7 @@ export class FieldwireSDK {
             }
         });
     }
-    public async statuses(projectId: string): Promise<AccountProjectSchema> {
+    public async statuses(projectId: string): Promise<ProjectStatusSchema> {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/statuses`, {

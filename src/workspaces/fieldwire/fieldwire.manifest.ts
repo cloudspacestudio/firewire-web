@@ -12,6 +12,7 @@ import { FieldwireDevices } from './devices/devices';
 import { FieldwireAWS } from './aws/aws';
 import { MsSqlServerDb } from '../../core/databases/mssqldb';
 import { FieldwireForms } from './forms/forms';
+import { FieldwireSharePoint } from './sharepoint/sharepoint';
 
 const sqlServerInitIntervalMs = 1000 * 60 * 10 // 10 minutes
 
@@ -25,6 +26,7 @@ export default class FieldwireManifest extends BaseManifest {
         this.items.push(...FieldwireTasks.manifestItems)
         this.items.push(...FieldwireDevices.manifestItems)
         this.items.push(...FieldwireForms.manifestItems)
+        this.items.push(...FieldwireSharePoint.manifestItems)
     }
 
     appname: string = 'fieldwireapi'

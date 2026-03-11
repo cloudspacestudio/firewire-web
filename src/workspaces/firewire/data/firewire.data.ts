@@ -1,16 +1,14 @@
 import * as express from 'express'
-import { FieldwireSDK } from '../fieldwire'
-import { SqlDb } from '../repository/sqldb'
+import { SqlDb } from '../../fieldwire/repository/sqldb'
 
-export class FieldwireDevices {
+export class FirewireData {
 
     static manifestItems = [
         // Get Devices
         {
             method: 'get',
-            path: '/api/fieldwire/devices',
+            path: '/api/firewire/devices',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -29,14 +27,13 @@ export class FieldwireDevices {
         // Get Device
         {
             method: 'get',
-            path: '/api/fieldwire/devices/:deviceId',
+            path: '/api/firewire/devices/:deviceId',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const deviceId = req.params.deviceId
                         if (!deviceId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing deviceId parameter'
                             })
                         }
@@ -54,9 +51,8 @@ export class FieldwireDevices {
         // Get View Devices
         {
             method: 'get',
-            path: '/api/fieldwire/vwdevices',
+            path: '/api/firewire/vwdevices',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -75,9 +71,8 @@ export class FieldwireDevices {
         // Get View Device Materials
         {
             method: 'get',
-            path: '/api/fieldwire/vwdevicematerials',
+            path: '/api/firewire/vwdevicematerials',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -96,14 +91,13 @@ export class FieldwireDevices {
         // Get View Device Materials by Device Id
         {
             method: 'get',
-            path: '/api/fieldwire/vwdevicematerials/:deviceId',
+            path: '/api/firewire/vwdevicematerials/:deviceId',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const deviceId = req.params.deviceId
                         if (!deviceId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing deviceId parameter'
                             })
                         }
@@ -123,14 +117,13 @@ export class FieldwireDevices {
         // Get Device Attributes by Device Id
         {
             method: 'get',
-            path: '/api/fieldwire/devices/:deviceId/attributes',
+            path: '/api/firewire/devices/:deviceId/attributes',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const deviceId = req.params.deviceId
                         if (!deviceId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing deviceId parameter'
                             })
                         }
@@ -150,14 +143,13 @@ export class FieldwireDevices {
         // Get Device Sub Tasks by Device Id
         {
             method: 'get',
-            path: '/api/fieldwire/devices/:deviceId/subtasks',
+            path: '/api/firewire/devices/:deviceId/subtasks',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const deviceId = req.params.deviceId
                         if (!deviceId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing deviceId parameter'
                             })
                         }
@@ -177,9 +169,8 @@ export class FieldwireDevices {
         // Get View Materials
         {
             method: 'get',
-            path: '/api/fieldwire/vwmaterials',
+            path: '/api/firewire/vwmaterials',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -198,9 +189,8 @@ export class FieldwireDevices {
         // Get Categories
         {
             method: 'get',
-            path: '/api/fieldwire/categories',
+            path: '/api/firewire/categories',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -219,9 +209,8 @@ export class FieldwireDevices {
         // Get Vendors
         {
             method: 'get',
-            path: '/api/fieldwire/vendors',
+            path: '/api/firewire/vendors',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -240,9 +229,8 @@ export class FieldwireDevices {
         // Get Eddy Products
         {
             method: 'get',
-            path: '/api/fieldwire/eddyproducts',
+            path: '/api/firewire/eddyproducts',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -261,9 +249,8 @@ export class FieldwireDevices {
         // Get Eddy Pricelist
         {
             method: 'get',
-            path: '/api/fieldwire/eddypricelist',
+            path: '/api/firewire/eddypricelist',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -282,9 +269,8 @@ export class FieldwireDevices {
         // Get View Eddy Pricelist combined with Eddy Products
         {
             method: 'get',
-            path: '/api/fieldwire/vweddypricelist',
+            path: '/api/firewire/vweddypricelist',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -303,14 +289,13 @@ export class FieldwireDevices {
         // Get View Eddy Pricelist combined with Eddy Products by Part Number
         {
             method: 'get',
-            path: '/api/fieldwire/vweddypricelist/:partNumber',
+            path: '/api/firewire/vweddypricelist/:partNumber',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const partNumber = req.params.partNumber
                         if (!partNumber) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing partNumber parameter'
                             })
                         }
@@ -330,9 +315,8 @@ export class FieldwireDevices {
         // Get Category Labor
         {
             method: 'get',
-            path: '/api/fieldwire/categorylabors',
+            path: '/api/firewire/categorylabors',
             fx: (req: express.Request, res: express.Response) => {
-                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
@@ -347,8 +331,19 @@ export class FieldwireDevices {
                     }
                 })
             }
-        },
-
+        }
     ]
 
+    static legacyFieldwireAliasItems = FirewireData.manifestItems.map((item) => {
+        const normalizedMethod = item.method.toLowerCase()
+        const method = normalizedMethod === 'get' || normalizedMethod === 'post' || normalizedMethod === 'put' || normalizedMethod === 'patch' || normalizedMethod === 'delete'
+            ? normalizedMethod
+            : 'get'
+
+        return {
+            ...item,
+            method,
+            path: item.path.replace('/api/firewire/', '/api/fieldwire/')
+        }
+    })
 }

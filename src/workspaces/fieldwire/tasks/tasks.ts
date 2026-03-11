@@ -21,7 +21,7 @@ export class FieldwireTasks {
         FieldwireTasks.getProjectTaskTypeAttributes(),
         FieldwireTasks.createProjectTask(),
         FieldwireTasks.importProjectTasks(),
-        FieldwireTasks.createProjectTask(),
+        FieldwireTasks.createTaskEmail(),
         FieldwireTasks.deleteTasks(),
         FieldwireTasks.seedFromTestDevices(),
         FieldwireTasks.getFloorplanTasks(),
@@ -40,7 +40,7 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
@@ -70,13 +70,13 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         const floorplanId = req.params.floorplanId
                         if (!floorplanId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: `Invalid Payload: Missing floorplanId parameter`
                             })
                         }
@@ -107,8 +107,13 @@ export class FieldwireTasks {
                         const projectId = req.params.projectId
                         const taskId = req.params.taskId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+                        if (!taskId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing taskId parameter'
                             })
                         }
                         const result = await fieldwire.taskRelatedTasks(projectId, taskId)
@@ -135,13 +140,13 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         const taskId = req.params.taskId
                         if (!taskId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: `Invalid Payload: Missing taskId parameter`
                             })
                         }
@@ -169,7 +174,7 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
@@ -199,12 +204,12 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             })
                         }
@@ -216,8 +221,6 @@ export class FieldwireTasks {
                                 message: 'Bad Request'
                             })
                         }
-                        const startDate = new Date(startDateParam)
-                        const endDate = new Date(endDateParam)
                         const result = await fieldwire.taskFilterByStatus(projectId, statusId, startDateParam, endDateParam)
                         res.status(200).json(result)
                         return resolve(true)
@@ -244,12 +247,12 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             })
                         }
@@ -277,12 +280,12 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             })
                         }
@@ -338,12 +341,12 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             })
                         }
@@ -407,12 +410,12 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             })
                         }
@@ -441,13 +444,13 @@ export class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             })
                         }
                         const taskId = req.params.taskId
                         if (!taskId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: `Invalid Payload: Missing taskId parameter`
                             })
                         }

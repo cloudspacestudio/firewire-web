@@ -6,7 +6,8 @@
   "scripts": {
     "start": "ts-node --project tsconfig.json ./src/index.ts",
     "dev": "nodemon ./src/index.ts",
-    "eddy": "ts-node --project tsconfig.json ./src/eddyimport.ts"
+    "eddy": "ts-node --project tsconfig.json ./src/eddyimport.ts",
+    "db:migrate:sqlserver": "ts-node --project tsconfig.json ./src/sqlserver.migrate.ts"
   },
   "author": "Steven Sederburg (stevens@cloudspacestudio.com)",
   "license": "ISC",

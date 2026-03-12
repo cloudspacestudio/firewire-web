@@ -32,8 +32,6 @@ class SubTaskResolver {
                         tasks.push(genericItem);
                     }
                 });
-                console.log(`Confirmed material subtasks list:`);
-                console.dir(tasks);
                 return resolve(tasks);
             }
             catch (err) {

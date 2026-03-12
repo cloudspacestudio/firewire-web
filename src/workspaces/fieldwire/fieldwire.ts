@@ -214,14 +214,7 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`account/projects`, {"Fieldwire-Filter": "active"})
-                const output: AccountProjectSchema[] = []
-                for(let i = 0; i < result.length; i++) {
-                    const record = result[i]
-                    if (FieldwireSDK.editableProjects.indexOf(record.id)>=0) {
-                        output.push(record)
-                    }
-                }
-                return resolve(output)
+                return resolve(result)
             } catch (err) {
                 return reject(err)
             }

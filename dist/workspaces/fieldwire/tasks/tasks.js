@@ -8,9 +8,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FieldwireTasks = void 0;
+const uuid_1 = require("uuid");
+const multer_1 = __importDefault(require("multer"));
+const csv_parse_1 = require("csv-parse");
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
 const fieldwire_1 = require("../fieldwire");
+//const upload = multer({ dest: 'uploads/' }); // stores files in /uploads
+const uploadImport = (0, multer_1.default)({ dest: 'uploads/' }).single('file');
 class FieldwireTasks {
     static getProjectTasks() {
         return {
@@ -22,7 +32,7 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
@@ -30,6 +40,110 @@ class FieldwireTasks {
                         res.status(200).json({
                             rows: result
                         });
+                        return resolve(true);
+                    }
+                    catch (err) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        });
+                        return resolve(err);
+                    }
+                }));
+            }
+        };
+    }
+    static getFloorplanTasks() {
+        return {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/floorplans/:floorplanId/tasks',
+            fx: (req, res) => {
+                const fieldwire = req.app.locals.fieldwire;
+                return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                    try {
+                        const projectId = req.params.projectId;
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            });
+                        }
+                        const floorplanId = req.params.floorplanId;
+                        if (!floorplanId) {
+                            return res.status(400).json({
+                                message: `Invalid Payload: Missing floorplanId parameter`
+                            });
+                        }
+                        const result = yield fieldwire.projectFloorplanTasks(projectId, floorplanId);
+                        res.status(200).json({
+                            rows: result
+                        });
+                        return resolve(true);
+                    }
+                    catch (err) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        });
+                        return resolve(err);
+                    }
+                }));
+            }
+        };
+    }
+    static getRelatedTasks() {
+        return {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/tasks/:taskId/related',
+            fx: (req, res) => {
+                const fieldwire = req.app.locals.fieldwire;
+                return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                    try {
+                        const projectId = req.params.projectId;
+                        const taskId = req.params.taskId;
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            });
+                        }
+                        if (!taskId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing taskId parameter'
+                            });
+                        }
+                        const result = yield fieldwire.taskRelatedTasks(projectId, taskId);
+                        res.status(200).json(result);
+                        return resolve(true);
+                    }
+                    catch (err) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        });
+                        return resolve(err);
+                    }
+                }));
+            }
+        };
+    }
+    static getTaskDetail() {
+        return {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/tasks/:taskId',
+            fx: (req, res) => {
+                const fieldwire = req.app.locals.fieldwire;
+                return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                    try {
+                        const projectId = req.params.projectId;
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            });
+                        }
+                        const taskId = req.params.taskId;
+                        if (!taskId) {
+                            return res.status(400).json({
+                                message: `Invalid Payload: Missing taskId parameter`
+                            });
+                        }
+                        const result = yield fieldwire.taskDetail(projectId, taskId);
+                        res.status(200).json(result);
                         return resolve(true);
                     }
                     catch (err) {
@@ -52,7 +166,7 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
@@ -60,6 +174,47 @@ class FieldwireTasks {
                         res.status(200).json({
                             rows: result
                         });
+                        return resolve(true);
+                    }
+                    catch (err) {
+                        res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        });
+                        return resolve(err);
+                    }
+                }));
+            }
+        };
+    }
+    static taskFilterByStatus() {
+        return {
+            method: 'post',
+            path: '/api/fieldwire/projects/:projectId/taskfilterbystatus',
+            fx: (req, res) => {
+                const fieldwire = req.app.locals.fieldwire;
+                return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                    try {
+                        const projectId = req.params.projectId;
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            });
+                        }
+                        if (fieldwire_1.FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                            return res.status(404).json({
+                                message: `Invalid Project Id: ${projectId} is not an editable project id`
+                            });
+                        }
+                        const statusId = req.body.statusId;
+                        const startDateParam = req.body.startDate;
+                        const endDateParam = req.body.endDate;
+                        if (!statusId || !startDateParam || !endDateParam) {
+                            return res.status(400).json({
+                                message: 'Bad Request'
+                            });
+                        }
+                        const result = yield fieldwire.taskFilterByStatus(projectId, statusId, startDateParam, endDateParam);
+                        res.status(200).json(result);
                         return resolve(true);
                     }
                     catch (err) {
@@ -82,12 +237,12 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
                         if (fieldwire_1.FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             });
                         }
@@ -115,12 +270,12 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
                         if (fieldwire_1.FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             });
                         }
@@ -184,50 +339,33 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
                         if (fieldwire_1.FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             });
                         }
-                        const batchId = req.body.batchId;
-                        const userId = req.body.userId;
+                        let fileDetails = yield this.getUpload(req, res);
+                        const filepath = path_1.default.resolve(fileDetails.path);
+                        let rawData = yield this.readUpload(filepath);
+                        const batchId = (0, uuid_1.v4)();
+                        const userId = '1684559';
                         const floorplanId = req.body.floorplanId;
                         const locationId = req.body.locationId; // if static value for upload
-                        const preview = req.body.preview; // if set to true, will not commit changes
-                        // load importData from file upload .csv
-                        /*
-                            Floorplan: Sample 1 - fb687444-8d64-4d62-b04f-6ae9cc925ac7
-                            Floorplan: James St - 5e96c01d-a150-4983-8f18-25620f2f6e3e
-
-                            Name        SLCAddr Serial  Strobe  Speaker
-                            --------------------------------------------------------------------------------
-                            Annuciator  MAC     N/A     N/A     N/A     B7B2BC9F-4347-45B4-8E9A-742CDEE00784
-                            APC (auxi)  N/A     N/A     N/A     N/A     565BE581-0F1C-4961-A265-499B69F69E86
-                            DOC         N/A     N/A     N/A     N/A     3E78D47D-B33E-4BE4-A948-0C732BC1D219
-                            Smoke Det   null    null    N/A     N/A     7E1AA044-FDF5-49D9-B187-8B0F4AA5BF4E
-                            Smoke Base  null    null    null    N/A     E0494009-3281-4A1E-9160-8973B2B76BB6
-                            Speak Ceil  N/A     N/A     null    null    9809FDBF-A07F-4472-A033-9C0774D4373F
-                            Strobe Ceil N/A     N/A     null    N/A     1BC630F0-E3D5-4CA6-9B0A-C50997B8A262
-                        */
-                        const rawData = [
-                            { Handle: 'a', Visibility: 'Annunciator', PosX: 10.00, PosY: 10.00, ADDRESS1: '0020060013', ADDRESS2: '01:23:45:67:89:AB' },
-                            { Handle: 'b', Visibility: 'APS (Auxiliary Power Supply)', PosX: 20.00, PosY: 20.00, ADDRESS1: '0020060015' },
-                            { Handle: 'c', Visibility: 'DOC (Document Storage Cabinet)', PosX: 30.00, PosY: 30.00, ADDRESS1: '0020060004' },
-                            { Handle: 'd', Visibility: 'Smoke Detector', PosX: 40.00, PosY: 40.00, ADDRESS1: '0020060023' },
-                            { Handle: 'e', Visibility: 'Smoke Detector with Sounder Base', PosX: 50.00, PosY: 50.00, ADDRESS1: '0020060025' },
-                            { Handle: 'f', Visibility: 'Speaker/Strobe - Ceiling', PosX: 60.00, PosY: 60.00, ADDRESS1: '0020060003' },
-                            { Handle: 'g', Visibility: 'Strobe - Ceiling', PosX: 70.00, PosY: 70.00, ADDRESS1: '0020060017' }
-                        ];
-                        // console.dir(req.app.locals.importData)
+                        const preview = true; //req.body.preview // if set to true, will not commit changes
                         if (!rawData) {
                             return res.status(400).json({
                                 message: `Invalid Import CSV`
                             });
                         }
+                        console.dir({
+                            batchId, userId, floorplanId, locationId, preview
+                        });
+                        //res.status(200).json(rawData)
+                        //return resolve(true)
                         const rows = rawData;
                         // get map information for import operation
                         //  by project with optional batch override
@@ -236,9 +374,16 @@ class FieldwireTasks {
                         const resolverParams = {
                             batchId, projectId, userId, floorplanId, locationId, previewMode: preview
                         };
-                        const result = yield fieldwire.importTasks(resolverParams, rows, req.app);
-                        res.status(200).json(result);
-                        return resolve(true);
+                        if (preview) {
+                            const result = yield fieldwire.importTasks(resolverParams, rows, req.app);
+                            res.status(200).json(result);
+                            return resolve(true);
+                        }
+                        else {
+                            const result = yield fieldwire.importTasksCommit(resolverParams, rows, req.app);
+                            res.status(200).json(result);
+                            return resolve(true);
+                        }
                     }
                     catch (err) {
                         console.error(err);
@@ -261,12 +406,12 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
                         if (fieldwire_1.FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
-                            res.status(404).json({
+                            return res.status(404).json({
                                 message: `Invalid Project Id: ${projectId} is not an editable project id`
                             });
                         }
@@ -294,13 +439,13 @@ class FieldwireTasks {
                     try {
                         const projectId = req.params.projectId;
                         if (!projectId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: 'Invalid Payload: Missing projectId parameter'
                             });
                         }
                         const taskId = req.params.taskId;
                         if (!taskId) {
-                            res.status(400).json({
+                            return res.status(400).json({
                                 message: `Invalid Payload: Missing taskId parameter`
                             });
                         }
@@ -329,6 +474,50 @@ class FieldwireTasks {
             }
         };
     }
+    static getUpload(req, res) {
+        return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+            try {
+                uploadImport(req, res, function (err) {
+                    if (err instanceof multer_1.default.MulterError) {
+                        // A Multer error occurred when uploading.
+                        return reject(err);
+                    }
+                    else if (err) {
+                        // An unknown error occurred when uploading.
+                        return reject(err);
+                    }
+                    // Everything went fine.
+                    return resolve(req.file);
+                });
+            }
+            catch (err2) {
+                return reject(err2);
+            }
+        }));
+    }
+    static readUpload(filepath) {
+        return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const records = [];
+                fs_1.default.createReadStream(filepath)
+                    .pipe((0, csv_parse_1.parse)({ columns: true, trim: true }))
+                    .on('data', (row) => {
+                    records.push(row);
+                })
+                    .on('end', () => {
+                    fs_1.default.unlinkSync(filepath); // remove temp file
+                    return resolve(records);
+                })
+                    .on('error', (err) => {
+                    fs_1.default.unlinkSync(filepath); // clean up
+                    return reject(err);
+                });
+            }
+            catch (err2) {
+                return reject(err2);
+            }
+        }));
+    }
 }
 exports.FieldwireTasks = FieldwireTasks;
 FieldwireTasks.manifestItems = [
@@ -336,7 +525,39 @@ FieldwireTasks.manifestItems = [
     FieldwireTasks.getProjectTaskTypeAttributes(),
     FieldwireTasks.createProjectTask(),
     FieldwireTasks.importProjectTasks(),
-    FieldwireTasks.createProjectTask(),
+    FieldwireTasks.createTaskEmail(),
     FieldwireTasks.deleteTasks(),
-    FieldwireTasks.seedFromTestDevices()
+    FieldwireTasks.seedFromTestDevices(),
+    FieldwireTasks.getFloorplanTasks(),
+    FieldwireTasks.taskFilterByStatus(),
+    FieldwireTasks.getTaskDetail(),
+    FieldwireTasks.getRelatedTasks()
 ];
+// load importData from file upload .csv
+/*
+    Floorplan: Sample 1 - fb687444-8d64-4d62-b04f-6ae9cc925ac7
+    Floorplan: James St - 5e96c01d-a150-4983-8f18-25620f2f6e3e
+
+    Name        SLCAddr Serial  Strobe  Speaker
+    --------------------------------------------------------------------------------
+    Annuciator  MAC     N/A     N/A     N/A     B7B2BC9F-4347-45B4-8E9A-742CDEE00784
+    APC (auxi)  N/A     N/A     N/A     N/A     565BE581-0F1C-4961-A265-499B69F69E86
+    DOC         N/A     N/A     N/A     N/A     3E78D47D-B33E-4BE4-A948-0C732BC1D219
+    Smoke Det   null    null    N/A     N/A     7E1AA044-FDF5-49D9-B187-8B0F4AA5BF4E
+    Smoke Base  null    null    null    N/A     E0494009-3281-4A1E-9160-8973B2B76BB6
+    Speak Ceil  N/A     N/A     null    null    9809FDBF-A07F-4472-A033-9C0774D4373F
+    Strobe Ceil N/A     N/A     null    N/A     1BC630F0-E3D5-4CA6-9B0A-C50997B8A262
+*/
+/*
+const rawData = [
+    {Handle: 'a', Visibility: 'Annunciator', PosX: 10.00, PosY: 10.00, ADDRESS1: '0020060013', ADDRESS2: '01:23:45:67:89:AB'},
+    {Handle: 'b', Visibility: 'APS (Auxiliary Power Supply)', PosX: 20.00, PosY: 20.00, ADDRESS1: '0020060015'},
+    {Handle: 'c', Visibility: 'DOC (Document Storage Cabinet)', PosX: 30.00, PosY: 30.00, ADDRESS1: '0020060004'},
+    {Handle: 'd', Visibility: 'Smoke Detector', PosX: 40.00, PosY: 40.00, ADDRESS1: '0020060023'},
+    {Handle: 'e', Visibility: 'Smoke Detector with Sounder Base', PosX: 50.00, PosY: 50.00, ADDRESS1: '0020060025'},
+    {Handle: 'f', Visibility: 'Speaker/Strobe - Ceiling', PosX: 60.00, PosY: 60.00, ADDRESS1: '0020060003'},
+    {Handle: 'g', Visibility: 'Strobe - Ceiling', PosX: 70.00, PosY: 70.00, ADDRESS1: '0020060017'}
+]
+// console.dir(req.app.locals.importData)
+
+*/

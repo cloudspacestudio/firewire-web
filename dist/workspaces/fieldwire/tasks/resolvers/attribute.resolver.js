@@ -22,6 +22,8 @@ class AttributeResolver {
                 const defaultTaskTypeId = this.deviceResolver.taskTypeAttributesFromFieldwire[0].task_type_id;
                 const preciseAttrs = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId === params.projectId && s.materialId === this.resolvedDevice.id);
                 const genericAttrs = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId === '*' && s.materialId === this.resolvedDevice.id);
+                const globalProjectAttrs = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId === params.projectId && s.materialId === '*');
+                const globalOrgAttrs = this.deviceResolver.materialAttributesFromDb.filter(s => s.projectId === '*' && s.materialId === '*');
                 // Make sure fieldwire has custom attributes available
                 // Merge 2 collections together loading most precise first
                 const attrs = [];
@@ -29,6 +31,18 @@ class AttributeResolver {
                     attrs.push(preciseItem);
                 });
                 genericAttrs.forEach((genericItem) => {
+                    const alreadyExistsTest = attrs.find(s => s.name === genericItem.name);
+                    if (!alreadyExistsTest) {
+                        attrs.push(genericItem);
+                    }
+                });
+                globalProjectAttrs.forEach((genericItem) => {
+                    const alreadyExistsTest = attrs.find(s => s.name === genericItem.name);
+                    if (!alreadyExistsTest) {
+                        attrs.push(genericItem);
+                    }
+                });
+                globalOrgAttrs.forEach((genericItem) => {
                     const alreadyExistsTest = attrs.find(s => s.name === genericItem.name);
                     if (!alreadyExistsTest) {
                         attrs.push(genericItem);
@@ -44,7 +58,7 @@ class AttributeResolver {
                         const customTaskAttr = {
                             id: (0, uuid_1.v4)(), project_id: params.projectId, task_type_id: defaultTaskTypeId,
                             name: attr.name,
-                            kind: this.getKindOfAttribute(attr),
+                            kind: this.getKindOfAttribute(attr), // 21 is shorttext 22 is number
                             ordinal: toBeOrdinal,
                             visible: true, always_visibile: false,
                             creator_user_id: params.userId, last_editor_user_id: params.userId
@@ -58,8 +72,8 @@ class AttributeResolver {
                         }
                     }
                 }
-                console.log(`Confirmed material attributes list:`);
-                console.dir(attrs);
+                //console.log(`Confirmed material attributes list:`)
+                //console.dir(attrs)
                 return resolve(attrs);
             }
             catch (err) {
@@ -83,6 +97,28 @@ class AttributeResolver {
             default:
                 return 21;
         }
+    }
+    calculatePreviewAttrValue(attr, params, row) {
+        const defaultCalc = attr.defaultValue;
+        if (!defaultCalc) {
+            return null;
+        }
+        const valueType = this.getKindOfAttribute(attr);
+        if (defaultCalc.startsWith("F'")) {
+            const fieldName = defaultCalc.replace("F'", "").replace("'", "");
+            const testValue = row[fieldName];
+            if (!testValue) {
+                return null;
+            }
+            if (valueType === 22) {
+                if (isNaN(testValue)) {
+                    return testValue;
+                }
+                return +testValue;
+            }
+            return testValue;
+        }
+        return defaultCalc;
     }
     calculateAttributeValue(taskAttrToBeCreated, attr, params, row) {
         const defaultCalc = attr.defaultValue;

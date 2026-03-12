@@ -11,7 +11,6 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DeviceResolver = void 0;
 const sqldb_1 = require("../../repository/sqldb");
-const device_strategies_1 = require("../strategies/device.strategies");
 class DeviceResolver {
     constructor(fw, app) {
         this.fw = fw;
@@ -83,7 +82,10 @@ class DeviceResolver {
                 return resolve(true);
             }
             catch (err) {
-                console.error(err);
+                if (!err.handled) {
+                    err.handled = true;
+                    console.error(err);
+                }
                 return reject(err);
             }
         }));
@@ -165,6 +167,10 @@ class DeviceResolver {
                 return resolve(resolvedDevice);
             }
             catch (err) {
+                if (!err.handled) {
+                    err.handled = true;
+                    console.error(err);
+                }
                 return reject(err);
             }
         }));
@@ -182,29 +188,32 @@ class DeviceResolver {
     resolveDeviceRecord(params, row) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             try {
-                if (this.selectedDeviceResolutionStrategy) {
-                    // Use the strategy from formula to read the device key and fetch the device
-                    // Syntax of column names to use as lookups in device table
-                    // name=Visibility|part number=partNumber etc.
-                    // for simplicity and until we lock in the strategy, use static values
-                    const deviceStrategies = new device_strategies_1.DeviceStrategies();
-                    const strategy = deviceStrategies.strategies.find(s => { var _a; return s.name === ((_a = this.selectedDeviceResolutionStrategy) === null || _a === void 0 ? void 0 : _a.formula); });
-                    if (strategy) {
-                        const strategyResult = yield strategy.fx(params, row, this.devicesFromDb, this.deviceAliasesFromDb);
-                        return resolve(strategyResult);
-                    }
-                    else {
-                        const defaultResult = yield this.defaultResolveDeviceRecord(params, row);
-                        return resolve(defaultResult);
-                    }
-                }
-                else {
-                    const result = yield this.defaultResolveDeviceRecord(params, row);
-                    return resolve(result);
-                }
+                const result = yield this.defaultResolveDeviceRecord(params, row);
+                return resolve(result);
+                // if (this.selectedDeviceResolutionStrategy) {
+                //     // Use the strategy from formula to read the device key and fetch the device
+                //     // Syntax of column names to use as lookups in device table
+                //     // name=Visibility|part number=partNumber etc.
+                //     // for simplicity and until we lock in the strategy, use static values
+                //     const deviceStrategies: DeviceStrategies = new DeviceStrategies()
+                //     const strategy: FormulaStrategy | undefined = deviceStrategies.strategies.find(s=>s.name===this.selectedDeviceResolutionStrategy?.formula)
+                //     if (strategy) {
+                //         const strategyResult = await strategy.fx(params, row, this.devicesFromDb, this.deviceAliasesFromDb)
+                //         return resolve(strategyResult)
+                //     } else {
+                //         const defaultResult = await this.defaultResolveDeviceRecord(params, row)
+                //         return resolve(defaultResult)
+                //     }
+                // } else {
+                //     const result = await this.defaultResolveDeviceRecord(params, row)
+                //     return resolve(result)
+                // }
             }
             catch (err) {
-                console.error(err);
+                if (!err.handled) {
+                    err.handled = true;
+                    console.error(err);
+                }
                 return reject(err);
             }
         }));
@@ -212,38 +221,81 @@ class DeviceResolver {
     defaultResolveDeviceRecord(params, row) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             const defaultDeviceFieldName = 'Visibility';
+            const defaultFieldSearch = [
+                { ordinal: 0, deviceField: 'name', rowField: 'VISIBILITY' },
+                { ordinal: 1, deviceField: 'partNumber', rowField: 'DEVICEA' },
+                { ordinal: 2, deviceField: 'partNumber', rowField: 'DEVICEC' },
+                { ordinal: 3, deviceField: 'partNumber', rowField: 'DEVICEF' },
+            ];
             try {
-                const test = this.devicesFromDb.find(s => s.name === row[defaultDeviceFieldName]);
+                // Check for Full Name
+                let test = this.devicesFromDb.find(s => s.name === row[defaultDeviceFieldName]);
+                if (test) {
+                    return resolve(test);
+                }
+                // Check for Short Name
+                test = this.devicesFromDb.find(s => s.shortName === row[defaultDeviceFieldName]);
                 if (test) {
                     return resolve(test);
                 }
                 // Check device aliases
-                return resolve(DeviceResolver.searchForAlias(row[defaultDeviceFieldName], params, this.devicesFromDb, this.deviceAliasesFromDb));
+                const aliasLastResort = yield this.searchForAlias(row[defaultDeviceFieldName], params);
+                if (aliasLastResort) {
+                    return resolve(aliasLastResort);
+                }
+                // Look for other field matches
+                for (let i = 0; i < defaultFieldSearch.length; i++) {
+                    const record = defaultFieldSearch[i];
+                    const fieldTest = this.devicesFromDb.find((s) => s[record.deviceField] === row[record.rowField]);
+                    if (fieldTest) {
+                        return resolve(fieldTest);
+                    }
+                }
+                return resolve(null);
             }
             catch (err) {
+                if (!err.handled) {
+                    err.handled = true;
+                    console.error(err);
+                }
                 return reject(err);
             }
         }));
     }
-    static searchForAlias(text, params, devicesFromDb, deviceAliasesFromDb) {
-        let aliases = deviceAliasesFromDb.filter(s => s.aliasText === text && s.batchId === params.batchId);
-        if (aliases.length <= 0) {
-            aliases = deviceAliasesFromDb.filter(s => s.aliasText === text && s.projectId === params.projectId);
-        }
-        if (aliases.length <= 0) {
-            aliases = deviceAliasesFromDb.filter(s => s.aliasText === text && s.projectId === '*');
-        }
-        if (aliases.length <= 0) {
-            return null;
-        }
-        let foundDevice = null;
-        aliases.forEach((alias) => {
-            const test = devicesFromDb.find(s => s.name === alias.matchToText);
-            if (test && !foundDevice) {
-                foundDevice = Object.assign({}, test);
+    searchForAlias(params, row) {
+        return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+            try {
+                const text = row['Visibility'];
+                let aliases = this.deviceAliasesFromDb.filter(s => s.aliasText === text && s.batchId === params.batchId);
+                if (aliases.length <= 0) {
+                    aliases = this.deviceAliasesFromDb.filter(s => s.aliasText === text && s.projectId === params.projectId);
+                }
+                if (aliases.length <= 0) {
+                    aliases = this.deviceAliasesFromDb.filter(s => s.aliasText === text && s.projectId === '*');
+                }
+                if (aliases.length <= 0) {
+                    return resolve(null);
+                }
+                let foundDevice = null;
+                for (let i = 0; i < aliases.length; i++) {
+                    const alias = aliases[i];
+                    row['Visibility'] = alias.matchToText;
+                    const test = yield this.resolveDeviceRecord(params, row);
+                    if (test && !foundDevice) {
+                        foundDevice = Object.assign({}, test);
+                        return resolve(foundDevice);
+                    }
+                }
+                return resolve(foundDevice);
             }
-        });
-        return foundDevice;
+            catch (err) {
+                if (!err.handled) {
+                    err.handled = true;
+                    console.error(err);
+                }
+                return reject(err);
+            }
+        }));
     }
 }
 exports.DeviceResolver = DeviceResolver;

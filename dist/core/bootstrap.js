@@ -15,13 +15,23 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -39,12 +49,74 @@ exports.Bootstrap = void 0;
 const express_1 = __importDefault(require("express"));
 const helmet_1 = __importDefault(require("helmet"));
 const path = __importStar(require("node:path"));
+const jwt = __importStar(require("jsonwebtoken"));
+const crypto_1 = require("crypto");
 require("dotenv/config");
 const postgresdb_1 = require("./databases/postgresdb");
 const mongodb_1 = require("./databases/mongodb");
 const mssqldb_1 = require("./databases/mssqldb");
 const route_resolver_1 = require("./routing/route.resolver");
 class Bootstrap {
+    constructor() {
+        this.tokenIssuers = [];
+        this.tokenAudiences = [];
+        this.tokenTenantId = '';
+        this.requiredScopes = this.resolveRequiredScopes();
+        this.jwkByKid = new Map();
+        this.apiBearerLogger = (req, res, next) => {
+            const authHeader = req.headers.authorization;
+            if (!authHeader) {
+                res.status(401).json({
+                    message: 'Unauthorized'
+                });
+                return;
+            }
+            const [scheme, token] = authHeader.split(' ');
+            if (!scheme || !token || scheme.toLowerCase() !== 'bearer') {
+                res.status(401).json({
+                    message: 'Unauthorized'
+                });
+                return;
+            }
+            const decoded = jwt.decode(token, { complete: true });
+            try {
+                const decodedHeader = decoded && typeof decoded === 'object' && 'header' in decoded ? decoded.header : null;
+                const kid = decodedHeader && decodedHeader.kid ? decodedHeader.kid : '';
+                if (!kid || !this.jwkByKid.has(kid)) {
+                    throw new Error('Unable to resolve signing key for token.');
+                }
+                const jwk = this.jwkByKid.get(kid);
+                const publicKey = (0, crypto_1.createPublicKey)({ key: jwk, format: 'jwk' });
+                const verified = jwt.verify(token, publicKey, {
+                    algorithms: ['RS256', 'RS384', 'RS512'],
+                    issuer: this.tokenIssuers,
+                    audience: this.tokenAudiences
+                });
+                if (verified && typeof verified === 'object' && 'tid' in verified) {
+                    const tokenTid = verified.tid;
+                    if (tokenTid && tokenTid !== this.tokenTenantId) {
+                        throw new Error('Token tenant mismatch.');
+                    }
+                }
+                if (!this.hasRequiredScope(verified)) {
+                    throw new Error('Token missing required scope.');
+                }
+                const anyReq = req;
+                anyReq.bearerToken = token;
+                anyReq.bearerTokenOutput = verified;
+                next();
+            }
+            catch (err) {
+                if (err && err.message) {
+                    console.log(`verification error: ${err.message}`);
+                }
+                res.status(401).json({
+                    message: 'Unauthorized'
+                });
+                return;
+            }
+        };
+    }
     start(routeless = false) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             console.log(`miSSion.webserver: starting`);
@@ -119,7 +191,6 @@ class Bootstrap {
                     }
                     const sqlserver = new mssqldb_1.MsSqlServerDb(sqlConfig);
                     console.log(`miSSion.webserver: stoodup sql server`);
-                    console.dir(sqlConfig);
                     app.locals.sqlserver = sqlserver;
                 }
                 // #endregion
@@ -132,6 +203,8 @@ class Bootstrap {
                 }
                 // Read manifest and create endpoints
                 if (!routeless) {
+                    yield this.initializeTokenValidation();
+                    app.use('/api', this.apiBearerLogger);
                     console.log(`miSSion.webserver: initializing workspace routes`);
                     const resolver = new route_resolver_1.RouteResolver(path.join(process.cwd(), 'src', 'workspaces'));
                     console.log(`miSSion.webserver: attaching routes to webserver`);
@@ -180,6 +253,98 @@ class Bootstrap {
                 return resolve(failedApp);
             }
         }));
+    }
+    initializeTokenValidation() {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (this.jwkByKid.size > 0 && this.tokenIssuers.length > 0 && this.tokenAudiences.length > 0) {
+                return;
+            }
+            const tenantId = process.env.ENTRA_TENANT_ID || process.env.FIREWIRETENANTID || '';
+            const envAudience = process.env.ENTRA_API_AUDIENCE || process.env.FIREWIRECLIENTID || '';
+            if (!tenantId || !envAudience) {
+                throw new Error('Missing Entra token validation settings. Set ENTRA_TENANT_ID (or FIREWIRETENANTID) and ENTRA_API_AUDIENCE (or FIREWIRECLIENTID).');
+            }
+            const metadataUrl = `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/v2.0/.well-known/openid-configuration`;
+            const metadataRes = yield fetch(metadataUrl, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+            if (metadataRes.status >= 300) {
+                const body = yield metadataRes.text();
+                throw new Error(`Failed to retrieve Entra OpenID metadata (${metadataRes.status}): ${body}`);
+            }
+            const metadata = yield metadataRes.json();
+            if (!metadata.issuer || !metadata.jwks_uri) {
+                throw new Error('Entra OpenID metadata response is missing issuer or jwks_uri.');
+            }
+            const jwksRes = yield fetch(metadata.jwks_uri, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+            if (jwksRes.status >= 300) {
+                const body = yield jwksRes.text();
+                throw new Error(`Failed to retrieve Entra signing keys (${jwksRes.status}): ${body}`);
+            }
+            const jwks = yield jwksRes.json();
+            if (!jwks.keys || !Array.isArray(jwks.keys) || jwks.keys.length <= 0) {
+                throw new Error('Entra JWKS response does not include signing keys.');
+            }
+            this.jwkByKid.clear();
+            for (const key of jwks.keys) {
+                if (key && key.kid) {
+                    this.jwkByKid.set(key.kid, key);
+                }
+            }
+            if (this.jwkByKid.size <= 0) {
+                throw new Error('No key ids (kid) were found in Entra JWKS response.');
+            }
+            this.tokenTenantId = tenantId;
+            const configuredAudiences = envAudience
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => !!s);
+            const primaryAudience = configuredAudiences[0];
+            const audienceSet = new Set(configuredAudiences);
+            audienceSet.add(`api://${primaryAudience}`);
+            this.tokenAudiences = Array.from(audienceSet);
+            const issuerSet = new Set();
+            issuerSet.add(metadata.issuer);
+            issuerSet.add(`https://login.microsoftonline.com/${tenantId}/v2.0`);
+            issuerSet.add(`https://sts.windows.net/${tenantId}/`);
+            this.tokenIssuers = Array.from(issuerSet);
+            console.log(`miSSion.webserver: loaded Entra metadata and ${this.jwkByKid.size} signing key(s)`);
+            console.log(`miSSion.webserver: accepted token audiences`);
+            console.dir(this.tokenAudiences);
+            console.log(`miSSion.webserver: accepted token issuers`);
+            console.dir(this.tokenIssuers);
+        });
+    }
+    resolveRequiredScopes() {
+        const raw = process.env.ENTRA_REQUIRED_SCOPES || 'user_impersonation';
+        return raw
+            .split(',')
+            .map(s => s.trim())
+            .filter(s => !!s);
+    }
+    hasRequiredScope(verified) {
+        if (!this.requiredScopes || this.requiredScopes.length <= 0) {
+            return true;
+        }
+        if (!verified || typeof verified !== 'object') {
+            return false;
+        }
+        const tokenScopes = typeof verified.scp === 'string'
+            ? verified.scp.split(' ').map((s) => s.trim()).filter((s) => !!s)
+            : [];
+        const tokenRoles = Array.isArray(verified.roles)
+            ? verified.roles.filter((s) => typeof s === 'string')
+            : [];
+        const tokenPermissions = new Set([...tokenScopes, ...tokenRoles]);
+        return this.requiredScopes.some(scope => tokenPermissions.has(scope));
     }
     // Return a BootstrapStartupResponse. success of false will result in server always rendering error state
     preStart(app) {

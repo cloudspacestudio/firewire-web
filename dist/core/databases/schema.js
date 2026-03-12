@@ -731,4 +731,4 @@ var DataType;
     DataType["boolean"] = "boolean";
     DataType["date"] = "date";
     DataType["datetime"] = "datetime"; // string "2024-11-17T01:34:27Z"
-})(DataType = exports.DataType || (exports.DataType = {}));
+})(DataType || (exports.DataType = DataType = {}));

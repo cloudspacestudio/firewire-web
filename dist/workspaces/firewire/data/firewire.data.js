@@ -10,27 +10,22 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.FieldwireProjects = void 0;
-class FieldwireProjects {
+exports.FirewireData = void 0;
+const sqldb_1 = require("../../fieldwire/repository/sqldb");
+class FirewireData {
 }
-exports.FieldwireProjects = FieldwireProjects;
-_a = FieldwireProjects;
-FieldwireProjects.manifestItems = [
-    // Get Floorplans
+exports.FirewireData = FirewireData;
+_a = FirewireData;
+FirewireData.manifestItems = [
+    // Get Devices
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/floorplans',
+        path: '/api/firewire/devices',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.projectFloorplans(projectId, true);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getDevices();
                     return res.status(200).json({
                         rows: result
                     });
@@ -43,56 +38,40 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get as HTML Table
+    // Get Device
     {
         method: 'get',
-        path: '/api/data/fieldwire/projects/:projectId/floorplans',
+        path: '/api/firewire/devices/:deviceId',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
-                res.setHeader('Content-Type', 'text/html');
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).send('Invalid Payload: Missing projectId parameter');
-                    }
-                    const result = yield fieldwire.projectFloorplans(projectId, true);
-                    if (result) {
-                        let output = `<table>`;
-                        result.forEach((row) => {
-                            output += `<tr>`;
-                            output += `<td>${row.name}</td>`;
-                            output += `<td>${row.description}</td>`;
-                            output += `<td>${row.created_at}</td>`;
-                            output += `<td>${row.updated_at}</td>`;
-                            output += `</tr>`;
+                    const deviceId = req.params.deviceId;
+                    if (!deviceId) {
+                        return res.status(400).json({
+                            message: 'Invalid Payload: Missing deviceId parameter'
                         });
-                        output += `</table>`;
-                        return res.status(200).send(output);
                     }
-                    return res.status(200).send('<table><tr><td>No Data Found</td></tr></table>');
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getDevice(deviceId);
+                    return res.status(200).json(result);
                 }
                 catch (err) {
-                    return res.status(500).send(err && err.message ? err.message : err);
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    });
                 }
             }));
         }
     },
-    // Get Folders
+    // Get View Devices
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/folders',
+        path: '/api/firewire/vwdevices',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.folders(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getVwDevices();
                     return res.status(200).json({
                         rows: result
                     });
@@ -105,21 +84,15 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Sheets
+    // Get View Device Materials
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/sheets',
+        path: '/api/firewire/vwdevicematerials',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.sheets(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getVwDeviceMaterials();
                     return res.status(200).json({
                         rows: result
                     });
@@ -132,21 +105,21 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Statuses (Priority 1, Not Started, Completed etc.)
+    // Get View Device Materials by Device Id
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/statuses',
+        path: '/api/firewire/vwdevicematerials/:deviceId',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
+                    const deviceId = req.params.deviceId;
+                    if (!deviceId) {
+                        return res.status(400).json({
+                            message: 'Invalid Payload: Missing deviceId parameter'
                         });
                     }
-                    const result = yield fieldwire.statuses(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getDeviceMaterialByDeviceId(deviceId);
                     return res.status(200).json({
                         rows: result
                     });
@@ -159,21 +132,21 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Project Locations (Office 1, Lab 2 etc.)
+    // Get Device Attributes by Device Id
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/locations',
+        path: '/api/firewire/devices/:deviceId/attributes',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
+                    const deviceId = req.params.deviceId;
+                    if (!deviceId) {
+                        return res.status(400).json({
+                            message: 'Invalid Payload: Missing deviceId parameter'
                         });
                     }
-                    const result = yield fieldwire.locations(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getMaterialAttributesByDeviceId(deviceId);
                     return res.status(200).json({
                         rows: result
                     });
@@ -186,21 +159,21 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Project Teams (Categories e.g. Speaker Strobe, Fire Alarm Panel etc.)
+    // Get Device Sub Tasks by Device Id
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/teams',
+        path: '/api/firewire/devices/:deviceId/subtasks',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
+                    const deviceId = req.params.deviceId;
+                    if (!deviceId) {
+                        return res.status(400).json({
+                            message: 'Invalid Payload: Missing deviceId parameter'
                         });
                     }
-                    const result = yield fieldwire.teams(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getMaterialSubTasksByDeviceId(deviceId);
                     return res.status(200).json({
                         rows: result
                     });
@@ -213,21 +186,15 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Project Task Attributes
+    // Get View Materials
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/taskattributes',
+        path: '/api/firewire/vwmaterials',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.taskattributes(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getVwMaterials();
                     return res.status(200).json({
                         rows: result
                     });
@@ -240,21 +207,15 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Task Check Items
+    // Get Categories
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/taskcheckitems',
+        path: '/api/firewire/categories',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.taskcheckitems(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getCategories();
                     return res.status(200).json({
                         rows: result
                     });
@@ -267,21 +228,15 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Project Attachments
+    // Get Vendors
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/attachments',
+        path: '/api/firewire/vendors',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.attachments(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getVendors();
                     return res.status(200).json({
                         rows: result
                     });
@@ -294,42 +249,15 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Project Detail
+    // Get Eddy Products
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId',
+        path: '/api/firewire/eddyproducts',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
-                        });
-                    }
-                    const result = yield fieldwire.project(projectId);
-                    return res.status(200).json({
-                        data: result
-                    });
-                }
-                catch (err) {
-                    return res.status(500).json({
-                        message: err && err.message ? err.message : err
-                    });
-                }
-            }));
-        }
-    },
-    // Get Editable Project Ids
-    {
-        method: 'get',
-        path: '/api/fieldwire/account/editableprojectids',
-        fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
-            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
-                try {
-                    const result = yield fieldwire.editableProjects();
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getEddyProducts();
                     return res.status(200).json({
                         rows: result
                     });
@@ -342,21 +270,84 @@ FieldwireProjects.manifestItems = [
             }));
         }
     },
-    // Get Project Task Relations
+    // Get Eddy Pricelist
     {
         method: 'get',
-        path: '/api/fieldwire/projects/:projectId/task_relations',
+        path: '/api/firewire/eddypricelist',
         fx: (req, res) => {
-            const fieldwire = req.app.locals.fieldwire;
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
                 try {
-                    const projectId = req.params.projectId;
-                    if (!projectId) {
-                        res.status(400).json({
-                            message: 'Invalid Payload: Missing projectId parameter'
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getEddyPricelist();
+                    return res.status(200).json({
+                        rows: result
+                    });
+                }
+                catch (err) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    });
+                }
+            }));
+        }
+    },
+    // Get View Eddy Pricelist combined with Eddy Products
+    {
+        method: 'get',
+        path: '/api/firewire/vweddypricelist',
+        fx: (req, res) => {
+            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
+                try {
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getVwEddyPricelist();
+                    return res.status(200).json({
+                        rows: result
+                    });
+                }
+                catch (err) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    });
+                }
+            }));
+        }
+    },
+    // Get View Eddy Pricelist combined with Eddy Products by Part Number
+    {
+        method: 'get',
+        path: '/api/firewire/vweddypricelist/:partNumber',
+        fx: (req, res) => {
+            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
+                try {
+                    const partNumber = req.params.partNumber;
+                    if (!partNumber) {
+                        return res.status(400).json({
+                            message: 'Invalid Payload: Missing partNumber parameter'
                         });
                     }
-                    const result = yield fieldwire.projectTaskRelations(projectId);
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getVwEddyPricelistByPartNumber(partNumber);
+                    return res.status(200).json({
+                        rows: result
+                    });
+                }
+                catch (err) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    });
+                }
+            }));
+        }
+    },
+    // Get Category Labor
+    {
+        method: 'get',
+        path: '/api/firewire/categorylabors',
+        fx: (req, res) => {
+            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
+                try {
+                    const sqldb = new sqldb_1.SqlDb(req.app);
+                    const result = yield sqldb.getCategoryLabors();
                     return res.status(200).json({
                         rows: result
                     });
@@ -370,3 +361,10 @@ FieldwireProjects.manifestItems = [
         }
     }
 ];
+FirewireData.legacyFieldwireAliasItems = _a.manifestItems.map((item) => {
+    const normalizedMethod = item.method.toLowerCase();
+    const method = normalizedMethod === 'get' || normalizedMethod === 'post' || normalizedMethod === 'put' || normalizedMethod === 'patch' || normalizedMethod === 'delete'
+        ? normalizedMethod
+        : 'get';
+    return Object.assign(Object.assign({}, item), { method, path: item.path.replace('/api/firewire/', '/api/fieldwire/') });
+});

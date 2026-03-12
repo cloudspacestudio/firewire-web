@@ -15,8 +15,9 @@ const fieldwire_1 = require("./fieldwire");
 const accounts_1 = require("./accounts/accounts");
 const projects_1 = require("./projects/projects");
 const tasks_1 = require("./tasks/tasks");
-const devices_1 = require("./devices/devices");
 const aws_1 = require("./aws/aws");
+const forms_1 = require("./forms/forms");
+const projectdocuments_1 = require("./projectdocuments/projectdocuments");
 const sqlServerInitIntervalMs = 1000 * 60 * 10; // 10 minutes
 class FieldwireManifest extends base_manifest_1.BaseManifest {
     constructor() {
@@ -29,7 +30,8 @@ class FieldwireManifest extends base_manifest_1.BaseManifest {
         this.items.push(...projects_1.FieldwireProjects.manifestItems);
         this.items.push(...aws_1.FieldwireAWS.manifestItems);
         this.items.push(...tasks_1.FieldwireTasks.manifestItems);
-        this.items.push(...devices_1.FieldwireDevices.manifestItems);
+        this.items.push(...forms_1.FieldwireForms.manifestItems);
+        this.items.push(...projectdocuments_1.FieldwireProjectDocuments.manifestItems);
     }
     attach(app) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
@@ -40,6 +42,7 @@ class FieldwireManifest extends base_manifest_1.BaseManifest {
                     const sql = app.locals.sqlserver;
                     try {
                         const initResult = yield sql.init();
+                        sql.query(`SELECT TOP 1 * FROM devices`);
                         console.log(`miSSion.webserver: sqlserver: keepalive`);
                     }
                     catch (err) {
@@ -57,4 +60,4 @@ exports.default = FieldwireManifest;
     Block Setup 101: 4b9a65d3-4ce4-4308-b93e-4513ff98fc72
     Samsung Office Building: dc15eebb-6c6e-4bc1-86da-68019d5a16d3
     Test: d0105078-da46-4a42-809f-b015b0cf87c8
-*/ 
+*/

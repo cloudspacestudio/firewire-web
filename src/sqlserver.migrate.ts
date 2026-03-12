@@ -35,6 +35,7 @@ type ViewMeta = {
 
 const SOURCE_PREFIX = 'MIG_SRC_SQL'
 const TARGET_PREFIX = 'MIG_DST_SQL'
+const SQLSERVER_MAX_PARAMETERS = 2100
 
 function readRequiredEnv(name: string): string {
     const value = process.env[name]
@@ -295,11 +296,6 @@ ORDER BY ${qn(orderByColumn)} ASC
 OFFSET ${offset} ROWS FETCH NEXT ${fetchSize} ROWS ONLY;`.trim()
 }
 
-async function setIdentityInsert(targetPool: mssql.ConnectionPool, schemaName: string, tableName: string, enabled: boolean): Promise<void> {
-    const sql = `SET IDENTITY_INSERT ${fullTableName(schemaName, tableName)} ${enabled ? 'ON' : 'OFF'};`
-    await targetPool.request().query(sql)
-}
-
 async function truncateTargetTable(targetPool: mssql.ConnectionPool, schemaName: string, tableName: string): Promise<void> {
     await targetPool.request().query(`TRUNCATE TABLE ${fullTableName(schemaName, tableName)};`)
 }
@@ -328,6 +324,23 @@ VALUES ${valuesSql.join(',\n')};`.trim()
     return { sql, params }
 }
 
+function buildIdentityInsertBatch(sql: string, schemaName: string, tableName: string): string {
+    const table = fullTableName(schemaName, tableName)
+    return `
+SET IDENTITY_INSERT ${table} ON;
+${sql}
+SET IDENTITY_INSERT ${table} OFF;`.trim()
+}
+
+function getSafeWriteBatchSize(configuredBatchSize: number, columnCount: number): number {
+    if (columnCount <= 0) {
+        throw new Error('Cannot determine write batch size for a table with no insertable columns.')
+    }
+
+    const maxRowsPerStatement = Math.max(1, Math.floor(SQLSERVER_MAX_PARAMETERS / columnCount))
+    return Math.max(1, Math.min(configuredBatchSize, maxRowsPerStatement))
+}
+
 async function copyTableData(
     sourcePool: mssql.ConnectionPool,
     targetPool: mssql.ConnectionPool,
@@ -343,21 +356,25 @@ async function copyTableData(
         return 0
     }
 
+    const safeWriteBatchSize = getSafeWriteBatchSize(writeBatchSize, insertableColumns.length)
+    if (safeWriteBatchSize !== writeBatchSize) {
+        console.log(
+            `Reducing write batch size for ${schemaName}.${tableName} from ${writeBatchSize} to ${safeWriteBatchSize} ` +
+            `to stay within SQL Server's ${SQLSERVER_MAX_PARAMETERS}-parameter limit.`
+        )
+    }
+
     const hasIdentity = insertableColumns.some((c) => c.is_identity)
     const orderBy = insertableColumns[0].name
 
-    if (shouldTruncateTarget) {
-        await truncateTargetTable(targetPool, schemaName, tableName)
-    }
-
-    let copied = 0
-    let offset = 0
-
-    if (hasIdentity) {
-        await setIdentityInsert(targetPool, schemaName, tableName, true)
-    }
-
     try {
+        if (shouldTruncateTarget) {
+            await truncateTargetTable(targetPool, schemaName, tableName)
+        }
+
+        let copied = 0
+        let offset = 0
+
         while (true) {
             const sourceSql = toTableSelectSql(schemaName, tableName, insertableColumns, orderBy, offset, readBatchSize)
             const result = await sourcePool.request().query(sourceSql)
@@ -366,41 +383,70 @@ async function copyTableData(
                 break
             }
 
-            for (let i = 0; i < rows.length; i += writeBatchSize) {
-                const chunk = rows.slice(i, i + writeBatchSize)
+            for (let i = 0; i < rows.length; i += safeWriteBatchSize) {
+                const chunk = rows.slice(i, i + safeWriteBatchSize)
                 const statement = buildInsertSql(schemaName, tableName, insertableColumns, chunk)
                 const req = targetPool.request()
                 statement.params.forEach((p) => {
                     req.input(p.name, p.value as any)
                 })
-                await req.query(statement.sql)
+                const sql = hasIdentity
+                    ? buildIdentityInsertBatch(statement.sql, schemaName, tableName)
+                    : statement.sql
+                await req.batch(sql)
                 copied += chunk.length
             }
 
             offset += rows.length
             console.log(`Copied ${schemaName}.${tableName}: ${copied} rows`)
         }
-    } finally {
-        if (hasIdentity) {
-            await setIdentityInsert(targetPool, schemaName, tableName, false)
-        }
-    }
 
-    return copied
+        return copied
+    } catch (err) {
+        throw err
+    }
 }
 
 async function recreateViews(sourcePool: mssql.ConnectionPool, targetPool: mssql.ConnectionPool, schemaName: string): Promise<number> {
-    const views = await getViews(sourcePool, schemaName)
-    for (const view of views) {
-        const targetViewName = `${qn(view.schema_name)}.${qn(view.view_name)}`
-        await targetPool.request().batch(`
+    const pending = [...await getViews(sourcePool, schemaName)]
+    let created = 0
+
+    while (pending.length > 0) {
+        let progress = false
+        const failed: Array<{ view: ViewMeta, error: any }> = []
+
+        for (const view of pending) {
+            const targetViewName = `${qn(view.schema_name)}.${qn(view.view_name)}`
+            try {
+                await targetPool.request().batch(`
 IF OBJECT_ID(N'${view.schema_name}.${view.view_name}', N'V') IS NOT NULL
     DROP VIEW ${targetViewName};
 `)
-        await targetPool.request().batch(view.definition)
-        console.log(`Created view ${view.schema_name}.${view.view_name}`)
+                await targetPool.request().batch(view.definition)
+                console.log(`Created view ${view.schema_name}.${view.view_name}`)
+                created += 1
+                progress = true
+            } catch (error: any) {
+                failed.push({ view, error })
+            }
+        }
+
+        if (failed.length <= 0) {
+            break
+        }
+
+        if (!progress) {
+            const details = failed
+                .map(({ view, error }) => `${view.schema_name}.${view.view_name}: ${error?.message || String(error)}`)
+                .join('\n')
+            throw new Error(`Unable to recreate ${failed.length} view(s) due to unresolved dependencies or invalid definitions:\n${details}`)
+        }
+
+        pending.length = 0
+        pending.push(...failed.map(({ view }) => view))
     }
-    return views.length
+
+    return created
 }
 
 async function getConnectionIdentity(pool: mssql.ConnectionPool): Promise<{ server: string, database: string }> {

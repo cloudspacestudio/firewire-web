@@ -20,6 +20,11 @@ class SqlDb {
             return this._getMany('devices');
         });
     }
+    getDevice(deviceId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getOne('vwDevices', `deviceId='${deviceId}'`);
+        });
+    }
     getVwDevices() {
         return __awaiter(this, void 0, void 0, function* () {
             return this._getMany('vwDevices');
@@ -35,9 +40,24 @@ class SqlDb {
             return this._getMany('vendors');
         });
     }
+    getCategoryLabors() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('categoryLabors');
+        });
+    }
     getMaterials() {
         return __awaiter(this, void 0, void 0, function* () {
             return this._getMany('materials');
+        });
+    }
+    getVwMaterials() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('vwMaterials');
+        });
+    }
+    getVwDeviceMaterials() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('vwDeviceMaterials');
         });
     }
     getDeviceMaterials() {
@@ -55,9 +75,19 @@ class SqlDb {
             return this._getMany('materialAttributes');
         });
     }
+    getMaterialAttributesByDeviceId(deviceId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('materialAttributes', `materialId='${deviceId}'`);
+        });
+    }
     getMaterialSubTasks() {
         return __awaiter(this, void 0, void 0, function* () {
             return this._getMany('materialSubTasks');
+        });
+    }
+    getMaterialSubTasksByDeviceId(deviceId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('materialSubTasks', `materialId='${deviceId}'`);
         });
     }
     getTestDevices() {
@@ -72,7 +102,17 @@ class SqlDb {
     }
     getEddyPricelist() {
         return __awaiter(this, void 0, void 0, function* () {
-            return this._getMany('EddyPricelist');
+            return this._getMany('EddyPricelist', `ProductStatus IS NULL`);
+        });
+    }
+    getVwEddyPricelist() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('VwEddyPricelist', `ProductStatus IS NULL`);
+        });
+    }
+    getVwEddyPricelistByPartNumber(partNumber) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('VwEddyPricelist', `PartNumber='${partNumber}' AND ProductStatus IS NULL`);
         });
     }
     createCategory(input) {
@@ -174,6 +214,11 @@ class SqlDb {
             }));
         });
     }
+    getDeviceMaterialByDeviceId(deviceId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return this._getMany('vwDeviceMaterials', `deviceId='${deviceId}'`);
+        });
+    }
     getDeviceMaterialByIds(deviceId, materialId) {
         return __awaiter(this, void 0, void 0, function* () {
             return this._getOne('devicematerials', `deviceId='${deviceId}' AND materialId='${materialId}`);
@@ -192,7 +237,7 @@ class SqlDb {
     _getMany(tableName, filter, sort) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             try {
-                if (this.app.locals && this.app.locals[tableName]) {
+                if (this.app.locals && this.app.locals[tableName] && !filter) {
                     return resolve([...this.app.locals[tableName]]);
                 }
                 const sql = this.app.locals.sqlserver;
@@ -207,8 +252,10 @@ class SqlDb {
                 if (!result || !result.recordset) {
                     throw new Error(`No ${tableName} with filter ${filter} found`);
                 }
-                this.app.locals[tableName] = [...result.recordset];
-                return resolve([...this.app.locals[tableName]]);
+                if (!filter) {
+                    this.app.locals[tableName] = [...result.recordset];
+                }
+                return resolve([...result.recordset]);
             }
             catch (err) {
                 if (!err.handled) {
@@ -238,6 +285,9 @@ class SqlDb {
                     }
                     if (result.length > 0) {
                         return resolve(result[0]);
+                    }
+                    if (result.recordset && result.recordset.length > 0) {
+                        return resolve(result.recordset[0]);
                     }
                     return resolve(null);
                 }

@@ -28,6 +28,12 @@ class FieldwireProjectDocuments {
             path: '/api/fieldwire/projects/:projectId/projectdocuments/upload',
             fx: (req, res) => __awaiter(this, void 0, void 0, function* () {
                 try {
+                    const bearerToken = this.resolveBearerToken(req);
+                    if (!bearerToken) {
+                        return res.status(401).json({
+                            message: 'Unauthorized'
+                        });
+                    }
                     const projectId = this.resolveString(req.params.projectId);
                     if (!projectId) {
                         return res.status(400).json({
@@ -40,18 +46,18 @@ class FieldwireProjectDocuments {
                             message: 'Invalid payload: missing file form field.'
                         });
                     }
-                    const client = new sharepoint_client_1.SharePointClient();
+                    const client = new sharepoint_client_1.SharePointClient(bearerToken);
                     let siteId = this.resolveString(req.body.siteId, process.env.SHAREPOINT_SITE_ID);
                     let driveId = this.resolveString(req.body.driveId, process.env.SHAREPOINT_DRIVE_ID);
                     const libraryUrl = this.resolveString(req.body.libraryUrl, process.env.SHAREPOINT_LIBRARY_URL);
-                    if ((!siteId || !driveId) && libraryUrl) {
+                    if (!driveId && libraryUrl) {
                         const resolved = yield client.resolveTargetFromLibraryUrl(libraryUrl);
                         siteId = siteId || resolved.siteId;
                         driveId = driveId || resolved.driveId;
                     }
-                    if (!siteId || !driveId) {
+                    if (!driveId) {
                         return res.status(400).json({
-                            message: 'Missing target values. Provide siteId/driveId or set SHAREPOINT_SITE_ID/SHAREPOINT_DRIVE_ID. You can also provide libraryUrl or set SHAREPOINT_LIBRARY_URL for automatic resolution.'
+                            message: 'Missing target values. Provide driveId or set SHAREPOINT_DRIVE_ID. You can also provide libraryUrl or set SHAREPOINT_LIBRARY_URL for automatic resolution.'
                         });
                     }
                     // TODO: Replace with actual project-code lookup.
@@ -154,6 +160,9 @@ class FieldwireProjectDocuments {
             }
         }
         return undefined;
+    }
+    static resolveBearerToken(req) {
+        return req.bearerToken;
     }
 }
 exports.FieldwireProjectDocuments = FieldwireProjectDocuments;

@@ -112,6 +112,9 @@ class FirewireProjectRepository {
                 'SELECT',
                 '    uuid,',
                 '    fieldwireId,',
+                '    isManualLocked,',
+                '    manualLockedAt,',
+                '    manualLockedBy,',
                 '    name,',
                 '    projectNbr,',
                 '    address,',
@@ -145,6 +148,9 @@ class FirewireProjectRepository {
                 'SELECT',
                 '    uuid,',
                 '    fieldwireId,',
+                '    isManualLocked,',
+                '    manualLockedAt,',
+                '    manualLockedBy,',
                 '    name,',
                 '    projectNbr,',
                 '    address,',
@@ -167,7 +173,12 @@ class FirewireProjectRepository {
                 .input('uuid', mssql.UniqueIdentifier, projectId)
                 .query(query);
             const row = (result.recordset || [])[0];
-            return row ? this.mapSqlRow(row) : null;
+            if (!row) {
+                return null;
+            }
+            const project = this.mapSqlRow(row);
+            project.worksheetData = yield this.getWorksheetData(projectId);
+            return project;
         });
     }
     createFirewireProject(input, userId) {
@@ -230,6 +241,9 @@ class FirewireProjectRepository {
                 .input('createdBy', mssql.NVarChar(256), userId)
                 .input('updatedBy', mssql.NVarChar(256), userId)
                 .query(query);
+            if (typeof normalized.worksheetData !== 'undefined') {
+                yield this.upsertWorksheetData(projectId, normalized.worksheetData, userId);
+            }
             const created = yield this.getFirewireProject(projectId);
             if (!created) {
                 throw new Error('Created project could not be reloaded.');
@@ -284,6 +298,9 @@ class FirewireProjectRepository {
             if (!result.rowsAffected || result.rowsAffected[0] <= 0) {
                 return null;
             }
+            if (typeof normalized.worksheetData !== 'undefined') {
+                yield this.upsertWorksheetData(projectId, normalized.worksheetData, userId);
+            }
             return this.getFirewireProject(projectId);
         });
     }
@@ -314,6 +331,127 @@ class FirewireProjectRepository {
             return this.getFirewireProject(projectId);
         });
     }
+    updateManualLock(projectId, isLocked, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.ensureTable();
+            if (!(0, uuid_1.validate)(projectId)) {
+                return null;
+            }
+            const pool = yield this.getPool();
+            const query = [
+                'UPDATE dbo.firewireProjects',
+                'SET',
+                '    isManualLocked = @isManualLocked,',
+                '    manualLockedAt = CASE WHEN @isManualLocked = 1 THEN SYSUTCDATETIME() ELSE NULL END,',
+                '    manualLockedBy = CASE WHEN @isManualLocked = 1 THEN @manualLockedBy ELSE NULL END,',
+                '    updatedAt = SYSUTCDATETIME(),',
+                '    updatedBy = @updatedBy',
+                'WHERE uuid = @uuid;'
+            ].join('\n');
+            const result = yield pool.request()
+                .input('uuid', mssql.UniqueIdentifier, projectId)
+                .input('isManualLocked', mssql.Bit, isLocked ? 1 : 0)
+                .input('manualLockedBy', mssql.NVarChar(256), isLocked ? userId : null)
+                .input('updatedBy', mssql.NVarChar(256), userId)
+                .query(query);
+            if (!result.rowsAffected || result.rowsAffected[0] <= 0) {
+                return null;
+            }
+            return this.getFirewireProject(projectId);
+        });
+    }
+    listProjectTemplates(userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.ensureTable();
+            const pool = yield this.getPool();
+            const query = [
+                'SELECT',
+                '    templateId,',
+                '    name,',
+                '    visibility,',
+                '    ownerUserId,',
+                '    templateJson,',
+                '    createdAt,',
+                '    createdBy,',
+                '    updatedAt,',
+                '    updatedBy',
+                'FROM dbo.firewireProjectTemplates',
+                'WHERE visibility = @publicVisibility',
+                '   OR ownerUserId = @ownerUserId',
+                'ORDER BY visibility ASC, name ASC, updatedAt DESC;'
+            ].join('\n');
+            const result = yield pool.request()
+                .input('publicVisibility', mssql.NVarChar(20), 'Public')
+                .input('ownerUserId', mssql.NVarChar(256), userId)
+                .query(query);
+            return (result.recordset || []).map((row) => this.mapTemplateRow(row));
+        });
+    }
+    saveProjectTemplate(input, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.ensureTable();
+            const normalized = this.normalizeTemplateInput(input);
+            const pool = yield this.getPool();
+            const templateId = normalized.templateId && (0, uuid_1.validate)(normalized.templateId)
+                ? normalized.templateId
+                : (0, uuid_1.v4)();
+            const templateJson = JSON.stringify({
+                firewireForm: normalized.firewireForm || {},
+                worksheetData: typeof normalized.worksheetData === 'undefined' ? null : normalized.worksheetData
+            });
+            const query = [
+                'DECLARE @resolvedTemplateId UNIQUEIDENTIFIER = @templateId;',
+                '',
+                'SELECT TOP 1 @resolvedTemplateId = templateId',
+                'FROM dbo.firewireProjectTemplates',
+                'WHERE name = @name',
+                '  AND visibility = @visibility',
+                '  AND ownerUserId = @ownerUserId;',
+                '',
+                'MERGE dbo.firewireProjectTemplates AS target',
+                'USING (SELECT @resolvedTemplateId AS templateId) AS source',
+                'ON target.templateId = source.templateId',
+                'WHEN MATCHED THEN',
+                '    UPDATE SET',
+                '        name = @name,',
+                '        visibility = @visibility,',
+                '        ownerUserId = @ownerUserId,',
+                '        templateJson = @templateJson,',
+                '        updatedAt = SYSUTCDATETIME(),',
+                '        updatedBy = @updatedBy',
+                'WHEN NOT MATCHED THEN',
+                '    INSERT (templateId, name, visibility, ownerUserId, templateJson, createdBy, updatedBy)',
+                '    VALUES (@resolvedTemplateId, @name, @visibility, @ownerUserId, @templateJson, @createdBy, @updatedBy);',
+                '',
+                'SELECT',
+                '    templateId,',
+                '    name,',
+                '    visibility,',
+                '    ownerUserId,',
+                '    templateJson,',
+                '    createdAt,',
+                '    createdBy,',
+                '    updatedAt,',
+                '    updatedBy',
+                'FROM dbo.firewireProjectTemplates',
+                'WHERE templateId = @resolvedTemplateId;'
+            ].join('\n');
+            const result = yield pool.request()
+                .input('templateId', mssql.UniqueIdentifier, templateId)
+                .input('name', mssql.NVarChar(200), normalized.name)
+                .input('visibility', mssql.NVarChar(20), normalized.visibility)
+                .input('ownerUserId', mssql.NVarChar(256), userId)
+                .input('templateJson', mssql.NVarChar(mssql.MAX), templateJson)
+                .input('createdBy', mssql.NVarChar(256), userId)
+                .input('updatedBy', mssql.NVarChar(256), userId)
+                .query(query);
+            const row = (result.recordset || [])[0];
+            if (!row) {
+                throw new Error('Template save failed.');
+            }
+            return this.mapTemplateRow(row);
+        });
+    }
     ensureTable() {
         return __awaiter(this, void 0, void 0, function* () {
             const pool = yield this.getPool();
@@ -323,6 +461,9 @@ class FirewireProjectRepository {
                 '    CREATE TABLE dbo.firewireProjects (',
                 '        uuid UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjects PRIMARY KEY,',
                 "        fieldwireId NVARCHAR(64) NULL,",
+                '        isManualLocked BIT NOT NULL CONSTRAINT DF_firewireProjects_isManualLocked DEFAULT 0,',
+                '        manualLockedAt DATETIME2(7) NULL,',
+                '        manualLockedBy NVARCHAR(256) NULL,',
                 '        name NVARCHAR(200) NOT NULL,',
                 '        projectNbr NVARCHAR(100) NOT NULL,',
                 "        address NVARCHAR(500) NOT NULL CONSTRAINT DF_firewireProjects_address DEFAULT N'',",
@@ -341,6 +482,35 @@ class FirewireProjectRepository {
                 '    );',
                 'END;'
             ].join('\n');
+            const worksheetQuery = [
+                "IF OBJECT_ID(N'dbo.firewireProjectWorksheets', N'U') IS NULL",
+                'BEGIN',
+                '    CREATE TABLE dbo.firewireProjectWorksheets (',
+                '        projectId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjectWorksheets PRIMARY KEY,',
+                '        worksheetJson NVARCHAR(MAX) NULL,',
+                '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectWorksheets_createdAt DEFAULT SYSUTCDATETIME(),',
+                '        createdBy NVARCHAR(256) NOT NULL,',
+                '        updatedAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectWorksheets_updatedAt DEFAULT SYSUTCDATETIME(),',
+                '        updatedBy NVARCHAR(256) NOT NULL',
+                '    );',
+                'END;'
+            ].join('\n');
+            const templateQuery = [
+                "IF OBJECT_ID(N'dbo.firewireProjectTemplates', N'U') IS NULL",
+                'BEGIN',
+                '    CREATE TABLE dbo.firewireProjectTemplates (',
+                '        templateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjectTemplates PRIMARY KEY,',
+                '        name NVARCHAR(200) NOT NULL,',
+                "        visibility NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectTemplates_visibility DEFAULT N'Private',",
+                '        ownerUserId NVARCHAR(256) NOT NULL,',
+                '        templateJson NVARCHAR(MAX) NOT NULL,',
+                '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectTemplates_createdAt DEFAULT SYSUTCDATETIME(),',
+                '        createdBy NVARCHAR(256) NOT NULL,',
+                '        updatedAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectTemplates_updatedAt DEFAULT SYSUTCDATETIME(),',
+                '        updatedBy NVARCHAR(256) NOT NULL',
+                '    );',
+                'END;'
+            ].join('\n');
             const alterQuery = [
                 "IF COL_LENGTH('dbo.firewireProjects', 'fieldwireId') IS NULL",
                 'BEGIN',
@@ -349,9 +519,23 @@ class FirewireProjectRepository {
                 "IF COL_LENGTH('dbo.firewireProjects', 'projectStatus') IS NULL",
                 'BEGIN',
                 "    ALTER TABLE dbo.firewireProjects ADD projectStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_firewireProjects_projectStatus_existing DEFAULT N'Estimation';",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'isManualLocked') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD isManualLocked BIT NOT NULL CONSTRAINT DF_firewireProjects_isManualLocked_existing DEFAULT 0;",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'manualLockedAt') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD manualLockedAt DATETIME2(7) NULL;",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'manualLockedBy') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD manualLockedBy NVARCHAR(256) NULL;",
                 'END;'
             ].join('\n');
             yield pool.request().batch(createQuery);
+            yield pool.request().batch(worksheetQuery);
+            yield pool.request().batch(templateQuery);
             yield pool.request().batch(alterQuery);
         });
     }
@@ -367,6 +551,7 @@ class FirewireProjectRepository {
     normalizeInput(input) {
         return {
             fieldwireId: this.normalizeFieldwireId(input === null || input === void 0 ? void 0 : input.fieldwireId),
+            worksheetData: this.normalizeWorksheetData(input === null || input === void 0 ? void 0 : input.worksheetData),
             name: this.requireString(input === null || input === void 0 ? void 0 : input.name, 'name', 200),
             projectNbr: this.requireString(input === null || input === void 0 ? void 0 : input.projectNbr, 'projectNbr', 100),
             address: this.optionalString(input === null || input === void 0 ? void 0 : input.address, 500),
@@ -386,6 +571,47 @@ class FirewireProjectRepository {
         }
         const value = input.trim();
         return value ? value.slice(0, 64) : null;
+    }
+    normalizeWorksheetData(input) {
+        if (typeof input === 'undefined') {
+            return undefined;
+        }
+        if (input === null) {
+            return null;
+        }
+        try {
+            return JSON.parse(JSON.stringify(input));
+        }
+        catch (_a) {
+            throw new Error('Invalid worksheetData payload.');
+        }
+    }
+    normalizeTemplateInput(input) {
+        return {
+            templateId: this.normalizeOptionalUuid(input === null || input === void 0 ? void 0 : input.templateId),
+            name: this.requireString(input === null || input === void 0 ? void 0 : input.name, 'name', 200),
+            visibility: (input === null || input === void 0 ? void 0 : input.visibility) === 'Public' ? 'Public' : 'Private',
+            firewireForm: this.normalizeTemplateFirewireForm(input === null || input === void 0 ? void 0 : input.firewireForm),
+            worksheetData: this.normalizeWorksheetData(input === null || input === void 0 ? void 0 : input.worksheetData)
+        };
+    }
+    normalizeTemplateFirewireForm(input) {
+        if (!input || typeof input !== 'object') {
+            return {};
+        }
+        return {
+            jobType: this.optionalString(input.jobType, 100),
+            scopeType: this.optionalString(input.scopeType, 100),
+            projectScope: this.optionalString(input.projectScope, 4000),
+            difficulty: this.optionalString(input.difficulty, 100)
+        };
+    }
+    normalizeOptionalUuid(input) {
+        if (typeof input !== 'string') {
+            return null;
+        }
+        const value = input.trim();
+        return value && (0, uuid_1.validate)(value) ? value : null;
     }
     normalizeProjectNbr(input) {
         if (typeof input !== 'string') {
@@ -432,6 +658,10 @@ class FirewireProjectRepository {
         return {
             uuid: row.uuid,
             fieldwireId: row.fieldwireId ? String(row.fieldwireId) : null,
+            worksheetData: null,
+            isManualLocked: Boolean(row.isManualLocked),
+            manualLockedAt: this.toIso(row.manualLockedAt),
+            manualLockedBy: row.manualLockedBy ? String(row.manualLockedBy) : null,
             name: row.name,
             projectNbr: row.projectNbr,
             address: row.address,
@@ -443,6 +673,92 @@ class FirewireProjectRepository {
             projectScope: row.projectScope,
             difficulty: row.difficulty,
             totalSqFt: Number(row.totalSqFt || 0),
+            createdAt: this.toIso(row.createdAt) || '',
+            createdBy: row.createdBy,
+            updatedAt: this.toIso(row.updatedAt) || '',
+            updatedBy: row.updatedBy
+        };
+    }
+    getWorksheetData(projectId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const pool = yield this.getPool();
+            const query = [
+                'SELECT projectId, worksheetJson',
+                'FROM dbo.firewireProjectWorksheets',
+                'WHERE projectId = @projectId;'
+            ].join('\n');
+            const result = yield pool.request()
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query(query);
+            const row = (result.recordset || [])[0];
+            if (!(row === null || row === void 0 ? void 0 : row.worksheetJson)) {
+                return null;
+            }
+            try {
+                return JSON.parse(String(row.worksheetJson));
+            }
+            catch (_a) {
+                return null;
+            }
+        });
+    }
+    upsertWorksheetData(projectId, worksheetData, userId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const pool = yield this.getPool();
+            if (worksheetData === null) {
+                yield pool.request()
+                    .input('projectId', mssql.UniqueIdentifier, projectId)
+                    .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;');
+                return;
+            }
+            const worksheetJson = JSON.stringify(worksheetData);
+            const query = [
+                'MERGE dbo.firewireProjectWorksheets AS target',
+                'USING (SELECT @projectId AS projectId) AS source',
+                'ON target.projectId = source.projectId',
+                'WHEN MATCHED THEN',
+                '    UPDATE SET',
+                '        worksheetJson = @worksheetJson,',
+                '        updatedAt = SYSUTCDATETIME(),',
+                '        updatedBy = @updatedBy',
+                'WHEN NOT MATCHED THEN',
+                '    INSERT (projectId, worksheetJson, createdBy, updatedBy)',
+                '    VALUES (@projectId, @worksheetJson, @createdBy, @updatedBy);'
+            ].join('\n');
+            yield pool.request()
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .input('worksheetJson', mssql.NVarChar(mssql.MAX), worksheetJson)
+                .input('createdBy', mssql.NVarChar(256), userId)
+                .input('updatedBy', mssql.NVarChar(256), userId)
+                .query(query);
+        });
+    }
+    mapTemplateRow(row) {
+        let templateData = {
+            firewireForm: {},
+            worksheetData: null
+        };
+        if (row.templateJson) {
+            try {
+                const parsed = JSON.parse(String(row.templateJson));
+                templateData = {
+                    firewireForm: (parsed === null || parsed === void 0 ? void 0 : parsed.firewireForm) && typeof parsed.firewireForm === 'object' ? parsed.firewireForm : {},
+                    worksheetData: typeof (parsed === null || parsed === void 0 ? void 0 : parsed.worksheetData) === 'undefined' ? null : parsed.worksheetData
+                };
+            }
+            catch (_a) {
+                templateData = {
+                    firewireForm: {},
+                    worksheetData: null
+                };
+            }
+        }
+        return {
+            templateId: row.templateId,
+            name: row.name,
+            visibility: row.visibility === 'Public' ? 'Public' : 'Private',
+            ownerUserId: row.ownerUserId,
+            templateData,
             createdAt: this.toIso(row.createdAt) || '',
             createdBy: row.createdBy,
             updatedAt: this.toIso(row.updatedAt) || '',

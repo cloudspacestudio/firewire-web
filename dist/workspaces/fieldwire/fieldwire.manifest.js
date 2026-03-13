@@ -18,6 +18,7 @@ const tasks_1 = require("./tasks/tasks");
 const aws_1 = require("./aws/aws");
 const forms_1 = require("./forms/forms");
 const projectdocuments_1 = require("./projectdocuments/projectdocuments");
+const sharepoint_1 = require("./sharepoint/sharepoint");
 const sqlServerInitIntervalMs = 1000 * 60 * 10; // 10 minutes
 class FieldwireManifest extends base_manifest_1.BaseManifest {
     constructor() {
@@ -32,6 +33,7 @@ class FieldwireManifest extends base_manifest_1.BaseManifest {
         this.items.push(...tasks_1.FieldwireTasks.manifestItems);
         this.items.push(...forms_1.FieldwireForms.manifestItems);
         this.items.push(...projectdocuments_1.FieldwireProjectDocuments.manifestItems);
+        this.items.push(...sharepoint_1.FieldwireSharePoint.manifestItems);
     }
     attach(app) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {

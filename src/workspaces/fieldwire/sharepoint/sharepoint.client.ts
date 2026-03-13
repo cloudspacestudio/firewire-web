@@ -1,12 +1,30 @@
 export interface SharePointUploadParams {
     driveId: string
-    siteId: string
+    siteId?: string
     buffer: Buffer
     originalName: string
     contentType?: string
     folderPath?: string
     fileName?: string
     metadata?: Record<string, string | number | boolean>
+}
+
+export interface SharePointListParams {
+    driveId: string
+    siteId?: string
+    folderPath?: string
+}
+
+export interface SharePointCreateFolderParams {
+    driveId: string
+    siteId?: string
+    folderPath: string
+}
+
+export interface SharePointFileContentParams {
+    driveId: string
+    siteId?: string
+    itemPath: string
 }
 
 export interface SharePointUploadResult {
@@ -16,6 +34,34 @@ export interface SharePointUploadResult {
     size: number
     eTag: string
     metadataApplied: boolean
+}
+
+export interface SharePointFolderItem {
+    id: string
+    name: string
+    webUrl?: string
+}
+
+export interface SharePointFileItem {
+    id: string
+    name: string
+    webUrl?: string
+    size?: number
+    lastModifiedDateTime?: string
+}
+
+export interface SharePointListResult {
+    siteId?: string
+    driveId: string
+    folderPath: string
+    folders: SharePointFolderItem[]
+    files: SharePointFileItem[]
+}
+
+export interface SharePointFileContentResult {
+    fileName: string
+    contentType: string
+    buffer: Buffer
 }
 
 interface AccessTokenResponse {
@@ -46,24 +92,28 @@ export class SharePointClient {
     private readonly tenantId: string
     private readonly clientId: string
     private readonly clientSecret: string
+    private readonly userAssertionToken: string
     private readonly graphBaseUrl = 'https://graph.microsoft.com/v1.0'
     private readonly graphScope = 'https://graph.microsoft.com/.default'
     private readonly maxSimpleUploadBytes = 250 * 1024 * 1024
 
-    constructor() {
+    constructor(userAssertionToken: string) {
         this.tenantId = process.env.SHAREPOINT_TENANT_ID || ''
         this.clientId = process.env.SHAREPOINT_CLIENT_ID || ''
         this.clientSecret = process.env.SHAREPOINT_CLIENT_SECRET || ''
+        this.userAssertionToken = userAssertionToken || ''
     }
 
     hasRequiredAppConfig(): boolean {
         return !!(this.tenantId && this.clientId && this.clientSecret)
     }
 
+    hasRequiredUserContext(): boolean {
+        return !!this.userAssertionToken
+    }
+
     async uploadToLibrary(params: SharePointUploadParams): Promise<SharePointUploadResult> {
-        if (!this.hasRequiredAppConfig()) {
-            throw new Error('Missing SharePoint app configuration. Set SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET.')
-        }
+        this.ensureClientCanCallGraph()
         if (!params.buffer || params.buffer.length <= 0) {
             throw new Error('Invalid upload payload: file content is empty.')
         }
@@ -80,7 +130,7 @@ export class SharePointClient {
         await this.ensureFolderPathExists(token, params.siteId, params.driveId, params.folderPath)
 
         const targetPath = this.buildGraphPath(params.folderPath, safeFileName)
-        const uploadUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(params.siteId)}/drives/${encodeURIComponent(params.driveId)}/root:${targetPath}:/content`
+        const uploadUrl = this.buildDriveRootContentUrl(params.driveId, targetPath, params.siteId)
 
         const uploadRes = await fetch(uploadUrl, {
             method: 'PUT',
@@ -114,10 +164,108 @@ export class SharePointClient {
         }
     }
 
-    async resolveTargetFromLibraryUrl(libraryUrl: string): Promise<{ siteId: string; driveId: string }> {
-        if (!this.hasRequiredAppConfig()) {
-            throw new Error('Missing SharePoint app configuration. Set SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET.')
+    async listLibraryItems(params: SharePointListParams): Promise<SharePointListResult> {
+        this.ensureClientCanCallGraph()
+        const token = await this.getAccessToken()
+        const folderPath = this.normalizeFolderPath(params.folderPath)
+        const listUrl = folderPath
+            ? `${this.buildDriveRootBaseUrl(params.driveId, params.siteId)}:${this.buildGraphPath(folderPath, '')}:/children?$select=id,name,webUrl,size,lastModifiedDateTime,folder,file`
+            : `${this.buildDriveRootBaseUrl(params.driveId, params.siteId)}/children?$select=id,name,webUrl,size,lastModifiedDateTime,folder,file`
+
+        const listRes = await fetch(listUrl, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json'
+            }
+        })
+        if (listRes.status >= 300) {
+            const errBody = await listRes.text()
+            throw new Error(`Unable to list SharePoint library items (${listRes.status}): ${errBody}`)
         }
+
+        const listJson = await listRes.json() as { value?: Array<{ id: string; name: string; webUrl?: string; size?: number; lastModifiedDateTime?: string; folder?: unknown; file?: unknown }> }
+        const items = listJson.value || []
+        return {
+            siteId: params.siteId,
+            driveId: params.driveId,
+            folderPath: folderPath || '/',
+            folders: items.filter(item => !!item.folder).map(item => ({
+                id: item.id,
+                name: item.name,
+                webUrl: item.webUrl
+            })),
+            files: items.filter(item => !!item.file).map(item => ({
+                id: item.id,
+                name: item.name,
+                webUrl: item.webUrl,
+                size: item.size,
+                lastModifiedDateTime: item.lastModifiedDateTime
+            }))
+        }
+    }
+
+    async createFolderIfMissing(params: SharePointCreateFolderParams): Promise<{ siteId?: string; driveId: string; folderPath: string }> {
+        this.ensureClientCanCallGraph()
+        const token = await this.getAccessToken()
+        const folderPath = this.normalizeFolderPath(params.folderPath)
+        if (!folderPath) {
+            throw new Error('Folder path is required.')
+        }
+        await this.ensureFolderPathExists(token, params.siteId, params.driveId, folderPath)
+        return {
+            siteId: params.siteId,
+            driveId: params.driveId,
+            folderPath
+        }
+    }
+
+    async readFileContent(params: SharePointFileContentParams): Promise<SharePointFileContentResult> {
+        this.ensureClientCanCallGraph()
+        const token = await this.getAccessToken()
+        const normalizedPath = this.normalizeFolderPath(params.itemPath)
+        if (!normalizedPath) {
+            throw new Error('Item path is required.')
+        }
+
+        const metadataUrl = `${this.buildDriveRootBaseUrl(params.driveId, params.siteId)}:${this.buildGraphPath(normalizedPath, '')}`
+        const metadataRes = await fetch(metadataUrl, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json'
+            }
+        })
+        if (metadataRes.status >= 300) {
+            const errBody = await metadataRes.text()
+            throw new Error(`Unable to read SharePoint file metadata (${metadataRes.status}): ${errBody}`)
+        }
+        const metadata = await metadataRes.json() as { name?: string }
+
+        const contentUrl = `${metadataUrl}:/content`
+        const contentRes = await fetch(contentUrl, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: '*/*'
+            }
+        })
+        if (contentRes.status >= 300) {
+            const errBody = await contentRes.text()
+            throw new Error(`Unable to read SharePoint file content (${contentRes.status}): ${errBody}`)
+        }
+
+        const contentType = contentRes.headers.get('content-type') || 'application/octet-stream'
+        const arrayBuffer = await contentRes.arrayBuffer()
+        return {
+            fileName: metadata.name || this.lastSegment(normalizedPath),
+            contentType,
+            buffer: Buffer.from(arrayBuffer)
+        }
+    }
+
+    async resolveTargetFromLibraryUrl(libraryUrl: string): Promise<{ siteId: string; driveId: string }> {
+        this.ensureClientCanCallGraph()
 
         const parsed = this.parseLibraryUrl(libraryUrl)
         const token = await this.getAccessToken()
@@ -187,12 +335,15 @@ export class SharePointClient {
     }
 
     private async getAccessToken(): Promise<string> {
+        this.ensureClientCanCallGraph()
         const tokenUrl = `https://login.microsoftonline.com/${encodeURIComponent(this.tenantId)}/oauth2/v2.0/token`
         const body = new URLSearchParams({
             client_id: this.clientId,
             client_secret: this.clientSecret,
             scope: this.graphScope,
-            grant_type: 'client_credentials'
+            grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            requested_token_use: 'on_behalf_of',
+            assertion: this.userAssertionToken
         })
 
         const tokenRes = await fetch(tokenUrl, {
@@ -214,8 +365,17 @@ export class SharePointClient {
         return tokenJson.access_token
     }
 
-    private async patchMetadata(token: string, siteId: string, driveId: string, itemId: string, metadata: Record<string, string | number | boolean>) {
-        const fieldsUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/listItem/fields`
+    private ensureClientCanCallGraph(): void {
+        if (!this.hasRequiredAppConfig()) {
+            throw new Error('Missing SharePoint app configuration. Set SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET.')
+        }
+        if (!this.hasRequiredUserContext()) {
+            throw new Error('Missing user bearer token required for SharePoint on-behalf-of access.')
+        }
+    }
+
+    private async patchMetadata(token: string, siteId: string | undefined, driveId: string, itemId: string, metadata: Record<string, string | number | boolean>) {
+        const fieldsUrl = `${this.buildDriveItemBaseUrl(driveId, itemId, siteId)}/listItem/fields`
         const metadataRes = await fetch(fieldsUrl, {
             method: 'PATCH',
             headers: {
@@ -230,7 +390,7 @@ export class SharePointClient {
         }
     }
 
-    private async ensureFolderPathExists(token: string, siteId: string, driveId: string, folderPath?: string): Promise<void> {
+    private async ensureFolderPathExists(token: string, siteId: string | undefined, driveId: string, folderPath?: string): Promise<void> {
         const segments = (folderPath || '')
             .split('/')
             .map(segment => segment.trim())
@@ -245,9 +405,9 @@ export class SharePointClient {
         }
     }
 
-    private async getOrCreateChildFolder(token: string, siteId: string, driveId: string, parentItemId: string, folderName: string): Promise<string> {
+    private async getOrCreateChildFolder(token: string, siteId: string | undefined, driveId: string, parentItemId: string, folderName: string): Promise<string> {
         const encodedParent = encodeURIComponent(parentItemId)
-        const childrenUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodedParent}/children?$select=id,name,folder`
+        const childrenUrl = `${this.buildDriveItemBaseUrl(driveId, parentItemId, siteId)}/children?$select=id,name,folder`
         const childrenRes = await fetch(childrenUrl, {
             method: 'GET',
             headers: {
@@ -266,7 +426,7 @@ export class SharePointClient {
             return existing.id
         }
 
-        const createUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodedParent}/children`
+        const createUrl = `${this.buildDriveItemBaseUrl(driveId, parentItemId, siteId)}/children`
         const createRes = await fetch(createUrl, {
             method: 'POST',
             headers: {
@@ -321,10 +481,42 @@ export class SharePointClient {
             .join('/')
 
         const encodedFileName = encodeURIComponent(fileName)
+        if (!encodedFileName) {
+            return folder ? `/${folder}` : ''
+        }
         if (!folder) {
             return `/${encodedFileName}`
         }
         return `/${folder}/${encodedFileName}`
+    }
+
+    private normalizeFolderPath(path: string | undefined): string {
+        return (path || '')
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '')
+            .replace(/\/+$/, '')
+            .trim()
+    }
+
+    private buildDriveRootBaseUrl(driveId: string, siteId?: string): string {
+        if (siteId) {
+            return `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/root`
+        }
+        return `${this.graphBaseUrl}/drives/${encodeURIComponent(driveId)}/root`
+    }
+
+    private buildDriveItemBaseUrl(driveId: string, itemId: string, siteId?: string): string {
+        if (siteId) {
+            return `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`
+        }
+        return `${this.graphBaseUrl}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`
+    }
+
+    private buildDriveRootContentUrl(driveId: string, targetPath: string, siteId?: string): string {
+        if (siteId) {
+            return `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/root:${targetPath}:/content`
+        }
+        return `${this.graphBaseUrl}/drives/${encodeURIComponent(driveId)}/root:${targetPath}:/content`
     }
 
     private parseLibraryUrl(rawUrl: string): { hostname: string; sitePath: string; libraryPath: string } {

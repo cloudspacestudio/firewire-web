@@ -19,6 +19,84 @@ _a = FirewireProjectsData;
 FirewireProjectsData.manifestItems = [
     {
         method: 'get',
+        path: '/api/firewire/project-templates',
+        fx: (req, res) => {
+            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
+                try {
+                    const userId = resolveUserId(req);
+                    const repository = new firewireproject_repository_1.FirewireProjectRepository(req.app);
+                    const result = yield repository.listProjectTemplates(userId);
+                    return res.status(200).json({
+                        rows: result
+                    });
+                }
+                catch (err) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    });
+                }
+            }));
+        }
+    },
+    {
+        method: 'post',
+        path: '/api/firewire/project-templates',
+        fx: (req, res) => {
+            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
+                try {
+                    const userId = resolveUserId(req);
+                    const payload = normalizeTemplatePayload(req.body);
+                    const repository = new firewireproject_repository_1.FirewireProjectRepository(req.app);
+                    const result = yield repository.saveProjectTemplate(payload, userId);
+                    return res.status(201).json({
+                        data: result
+                    });
+                }
+                catch (err) {
+                    const statusCode = isValidationError(err) ? 400 : 500;
+                    return res.status(statusCode).json({
+                        message: err && err.message ? err.message : err
+                    });
+                }
+            }));
+        }
+    },
+    {
+        method: 'patch',
+        path: '/api/firewire/projects/firewire/:projectId/lock',
+        fx: (req, res) => {
+            return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
+                var _b;
+                try {
+                    const projectId = String(req.params.projectId || '').trim();
+                    if (!projectId) {
+                        return res.status(400).json({
+                            message: 'Invalid payload: missing projectId parameter.'
+                        });
+                    }
+                    const userId = resolveUserId(req);
+                    const isLocked = !!((_b = req.body) === null || _b === void 0 ? void 0 : _b.isLocked);
+                    const repository = new firewireproject_repository_1.FirewireProjectRepository(req.app);
+                    const result = yield repository.updateManualLock(projectId, isLocked, userId);
+                    if (!result) {
+                        return res.status(404).json({
+                            message: 'Project not found.'
+                        });
+                    }
+                    return res.status(200).json({
+                        data: result
+                    });
+                }
+                catch (err) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    });
+                }
+            }));
+        }
+    },
+    {
+        method: 'get',
         path: '/api/firewire/projects',
         fx: (req, res) => {
             return new Promise((resolve, reject) => __awaiter(void 0, void 0, void 0, function* () {
@@ -170,6 +248,7 @@ FirewireProjectsData.legacyFieldwireAliasItems = _a.manifestItems.map((item) => 
 function normalizePayload(body) {
     return {
         fieldwireId: body === null || body === void 0 ? void 0 : body.fieldwireId,
+        worksheetData: body === null || body === void 0 ? void 0 : body.worksheetData,
         name: body === null || body === void 0 ? void 0 : body.name,
         projectNbr: body === null || body === void 0 ? void 0 : body.projectNbr,
         address: body === null || body === void 0 ? void 0 : body.address,
@@ -186,6 +265,15 @@ function normalizePayload(body) {
 function normalizeFieldwireMapPayload(body) {
     return {
         fieldwireId: body === null || body === void 0 ? void 0 : body.fieldwireId
+    };
+}
+function normalizeTemplatePayload(body) {
+    return {
+        templateId: body === null || body === void 0 ? void 0 : body.templateId,
+        name: body === null || body === void 0 ? void 0 : body.name,
+        visibility: body === null || body === void 0 ? void 0 : body.visibility,
+        firewireForm: body === null || body === void 0 ? void 0 : body.firewireForm,
+        worksheetData: body === null || body === void 0 ? void 0 : body.worksheetData
     };
 }
 function resolveUserId(req) {

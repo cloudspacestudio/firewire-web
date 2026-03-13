@@ -11,22 +11,24 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SharePointClient = void 0;
 class SharePointClient {
-    constructor() {
+    constructor(userAssertionToken) {
         this.graphBaseUrl = 'https://graph.microsoft.com/v1.0';
         this.graphScope = 'https://graph.microsoft.com/.default';
         this.maxSimpleUploadBytes = 250 * 1024 * 1024;
         this.tenantId = process.env.SHAREPOINT_TENANT_ID || '';
         this.clientId = process.env.SHAREPOINT_CLIENT_ID || '';
         this.clientSecret = process.env.SHAREPOINT_CLIENT_SECRET || '';
+        this.userAssertionToken = userAssertionToken || '';
     }
     hasRequiredAppConfig() {
         return !!(this.tenantId && this.clientId && this.clientSecret);
     }
+    hasRequiredUserContext() {
+        return !!this.userAssertionToken;
+    }
     uploadToLibrary(params) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (!this.hasRequiredAppConfig()) {
-                throw new Error('Missing SharePoint app configuration. Set SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET.');
-            }
+            this.ensureClientCanCallGraph();
             if (!params.buffer || params.buffer.length <= 0) {
                 throw new Error('Invalid upload payload: file content is empty.');
             }
@@ -40,7 +42,7 @@ class SharePointClient {
             }
             yield this.ensureFolderPathExists(token, params.siteId, params.driveId, params.folderPath);
             const targetPath = this.buildGraphPath(params.folderPath, safeFileName);
-            const uploadUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(params.siteId)}/drives/${encodeURIComponent(params.driveId)}/root:${targetPath}:/content`;
+            const uploadUrl = this.buildDriveRootContentUrl(params.driveId, targetPath, params.siteId);
             const uploadRes = yield fetch(uploadUrl, {
                 method: 'PUT',
                 headers: {
@@ -70,11 +72,107 @@ class SharePointClient {
             };
         });
     }
+    listLibraryItems(params) {
+        return __awaiter(this, void 0, void 0, function* () {
+            this.ensureClientCanCallGraph();
+            const token = yield this.getAccessToken();
+            const folderPath = this.normalizeFolderPath(params.folderPath);
+            const listUrl = folderPath
+                ? `${this.buildDriveRootBaseUrl(params.driveId, params.siteId)}:${this.buildGraphPath(folderPath, '')}:/children?$select=id,name,webUrl,size,lastModifiedDateTime,folder,file`
+                : `${this.buildDriveRootBaseUrl(params.driveId, params.siteId)}/children?$select=id,name,webUrl,size,lastModifiedDateTime,folder,file`;
+            const listRes = yield fetch(listUrl, {
+                method: 'GET',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/json'
+                }
+            });
+            if (listRes.status >= 300) {
+                const errBody = yield listRes.text();
+                throw new Error(`Unable to list SharePoint library items (${listRes.status}): ${errBody}`);
+            }
+            const listJson = yield listRes.json();
+            const items = listJson.value || [];
+            return {
+                siteId: params.siteId,
+                driveId: params.driveId,
+                folderPath: folderPath || '/',
+                folders: items.filter(item => !!item.folder).map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    webUrl: item.webUrl
+                })),
+                files: items.filter(item => !!item.file).map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    webUrl: item.webUrl,
+                    size: item.size,
+                    lastModifiedDateTime: item.lastModifiedDateTime
+                }))
+            };
+        });
+    }
+    createFolderIfMissing(params) {
+        return __awaiter(this, void 0, void 0, function* () {
+            this.ensureClientCanCallGraph();
+            const token = yield this.getAccessToken();
+            const folderPath = this.normalizeFolderPath(params.folderPath);
+            if (!folderPath) {
+                throw new Error('Folder path is required.');
+            }
+            yield this.ensureFolderPathExists(token, params.siteId, params.driveId, folderPath);
+            return {
+                siteId: params.siteId,
+                driveId: params.driveId,
+                folderPath
+            };
+        });
+    }
+    readFileContent(params) {
+        return __awaiter(this, void 0, void 0, function* () {
+            this.ensureClientCanCallGraph();
+            const token = yield this.getAccessToken();
+            const normalizedPath = this.normalizeFolderPath(params.itemPath);
+            if (!normalizedPath) {
+                throw new Error('Item path is required.');
+            }
+            const metadataUrl = `${this.buildDriveRootBaseUrl(params.driveId, params.siteId)}:${this.buildGraphPath(normalizedPath, '')}`;
+            const metadataRes = yield fetch(metadataUrl, {
+                method: 'GET',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/json'
+                }
+            });
+            if (metadataRes.status >= 300) {
+                const errBody = yield metadataRes.text();
+                throw new Error(`Unable to read SharePoint file metadata (${metadataRes.status}): ${errBody}`);
+            }
+            const metadata = yield metadataRes.json();
+            const contentUrl = `${metadataUrl}:/content`;
+            const contentRes = yield fetch(contentUrl, {
+                method: 'GET',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: '*/*'
+                }
+            });
+            if (contentRes.status >= 300) {
+                const errBody = yield contentRes.text();
+                throw new Error(`Unable to read SharePoint file content (${contentRes.status}): ${errBody}`);
+            }
+            const contentType = contentRes.headers.get('content-type') || 'application/octet-stream';
+            const arrayBuffer = yield contentRes.arrayBuffer();
+            return {
+                fileName: metadata.name || this.lastSegment(normalizedPath),
+                contentType,
+                buffer: Buffer.from(arrayBuffer)
+            };
+        });
+    }
     resolveTargetFromLibraryUrl(libraryUrl) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (!this.hasRequiredAppConfig()) {
-                throw new Error('Missing SharePoint app configuration. Set SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET.');
-            }
+            this.ensureClientCanCallGraph();
             const parsed = this.parseLibraryUrl(libraryUrl);
             const token = yield this.getAccessToken();
             const siteLookupUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(parsed.hostname)}:${parsed.sitePath}?$select=id`;
@@ -135,12 +233,15 @@ class SharePointClient {
     }
     getAccessToken() {
         return __awaiter(this, void 0, void 0, function* () {
+            this.ensureClientCanCallGraph();
             const tokenUrl = `https://login.microsoftonline.com/${encodeURIComponent(this.tenantId)}/oauth2/v2.0/token`;
             const body = new URLSearchParams({
                 client_id: this.clientId,
                 client_secret: this.clientSecret,
                 scope: this.graphScope,
-                grant_type: 'client_credentials'
+                grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                requested_token_use: 'on_behalf_of',
+                assertion: this.userAssertionToken
             });
             const tokenRes = yield fetch(tokenUrl, {
                 method: 'POST',
@@ -160,9 +261,17 @@ class SharePointClient {
             return tokenJson.access_token;
         });
     }
+    ensureClientCanCallGraph() {
+        if (!this.hasRequiredAppConfig()) {
+            throw new Error('Missing SharePoint app configuration. Set SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, and SHAREPOINT_CLIENT_SECRET.');
+        }
+        if (!this.hasRequiredUserContext()) {
+            throw new Error('Missing user bearer token required for SharePoint on-behalf-of access.');
+        }
+    }
     patchMetadata(token, siteId, driveId, itemId, metadata) {
         return __awaiter(this, void 0, void 0, function* () {
-            const fieldsUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/listItem/fields`;
+            const fieldsUrl = `${this.buildDriveItemBaseUrl(driveId, itemId, siteId)}/listItem/fields`;
             const metadataRes = yield fetch(fieldsUrl, {
                 method: 'PATCH',
                 headers: {
@@ -195,7 +304,7 @@ class SharePointClient {
     getOrCreateChildFolder(token, siteId, driveId, parentItemId, folderName) {
         return __awaiter(this, void 0, void 0, function* () {
             const encodedParent = encodeURIComponent(parentItemId);
-            const childrenUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodedParent}/children?$select=id,name,folder`;
+            const childrenUrl = `${this.buildDriveItemBaseUrl(driveId, parentItemId, siteId)}/children?$select=id,name,folder`;
             const childrenRes = yield fetch(childrenUrl, {
                 method: 'GET',
                 headers: {
@@ -212,7 +321,7 @@ class SharePointClient {
             if (existing && existing.id) {
                 return existing.id;
             }
-            const createUrl = `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodedParent}/children`;
+            const createUrl = `${this.buildDriveItemBaseUrl(driveId, parentItemId, siteId)}/children`;
             const createRes = yield fetch(createUrl, {
                 method: 'POST',
                 headers: {
@@ -263,10 +372,38 @@ class SharePointClient {
             .map(segment => encodeURIComponent(segment))
             .join('/');
         const encodedFileName = encodeURIComponent(fileName);
+        if (!encodedFileName) {
+            return folder ? `/${folder}` : '';
+        }
         if (!folder) {
             return `/${encodedFileName}`;
         }
         return `/${folder}/${encodedFileName}`;
+    }
+    normalizeFolderPath(path) {
+        return (path || '')
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '')
+            .replace(/\/+$/, '')
+            .trim();
+    }
+    buildDriveRootBaseUrl(driveId, siteId) {
+        if (siteId) {
+            return `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/root`;
+        }
+        return `${this.graphBaseUrl}/drives/${encodeURIComponent(driveId)}/root`;
+    }
+    buildDriveItemBaseUrl(driveId, itemId, siteId) {
+        if (siteId) {
+            return `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`;
+        }
+        return `${this.graphBaseUrl}/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}`;
+    }
+    buildDriveRootContentUrl(driveId, targetPath, siteId) {
+        if (siteId) {
+            return `${this.graphBaseUrl}/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/root:${targetPath}:/content`;
+        }
+        return `${this.graphBaseUrl}/drives/${encodeURIComponent(driveId)}/root:${targetPath}:/content`;
     }
     parseLibraryUrl(rawUrl) {
         let parsedUrl;

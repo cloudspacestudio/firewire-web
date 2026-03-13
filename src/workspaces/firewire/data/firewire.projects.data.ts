@@ -2,11 +2,88 @@ import * as express from 'express'
 import {
     FirewireProjectFieldwireMapInput,
     FirewireProjectInput,
+    FirewireProjectTemplateInput,
     FirewireProjectRepository
 } from '../repository/firewireproject.repository'
 
 export class FirewireProjectsData {
     static manifestItems = [
+        {
+            method: 'get',
+            path: '/api/firewire/project-templates',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const userId = resolveUserId(req)
+                        const repository = new FirewireProjectRepository(req.app)
+                        const result = await repository.listProjectTemplates(userId)
+                        return res.status(200).json({
+                            rows: result
+                        })
+                    } catch (err: Error | any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/project-templates',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const userId = resolveUserId(req)
+                        const payload = normalizeTemplatePayload(req.body)
+                        const repository = new FirewireProjectRepository(req.app)
+                        const result = await repository.saveProjectTemplate(payload, userId)
+                        return res.status(201).json({
+                            data: result
+                        })
+                    } catch (err: Error | any) {
+                        const statusCode = isValidationError(err) ? 400 : 500
+                        return res.status(statusCode).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'patch',
+            path: '/api/firewire/projects/firewire/:projectId/lock',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = String(req.params.projectId || '').trim()
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid payload: missing projectId parameter.'
+                            })
+                        }
+
+                        const userId = resolveUserId(req)
+                        const isLocked = !!req.body?.isLocked
+                        const repository = new FirewireProjectRepository(req.app)
+                        const result = await repository.updateManualLock(projectId, isLocked, userId)
+                        if (!result) {
+                            return res.status(404).json({
+                                message: 'Project not found.'
+                            })
+                        }
+
+                        return res.status(200).json({
+                            data: result
+                        })
+                    } catch (err: Error | any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
         {
             method: 'get',
             path: '/api/firewire/projects',
@@ -169,6 +246,7 @@ export class FirewireProjectsData {
 function normalizePayload(body: any): FirewireProjectInput {
     return {
         fieldwireId: body?.fieldwireId,
+        worksheetData: body?.worksheetData,
         name: body?.name,
         projectNbr: body?.projectNbr,
         address: body?.address,
@@ -186,6 +264,16 @@ function normalizePayload(body: any): FirewireProjectInput {
 function normalizeFieldwireMapPayload(body: any): FirewireProjectFieldwireMapInput {
     return {
         fieldwireId: body?.fieldwireId
+    }
+}
+
+function normalizeTemplatePayload(body: any): FirewireProjectTemplateInput {
+    return {
+        templateId: body?.templateId,
+        name: body?.name,
+        visibility: body?.visibility,
+        firewireForm: body?.firewireForm,
+        worksheetData: body?.worksheetData
     }
 }
 

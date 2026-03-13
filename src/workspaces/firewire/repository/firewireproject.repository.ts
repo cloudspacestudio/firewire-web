@@ -9,6 +9,10 @@ export type ProjectSource = 'fieldwire' | 'firewire' | 'both'
 export interface FirewireProjectRecord {
     uuid: string
     fieldwireId: string | null
+    worksheetData?: any | null
+    isManualLocked: boolean
+    manualLockedAt: string | null
+    manualLockedBy: string | null
     name: string
     projectNbr: string
     address: string
@@ -28,6 +32,7 @@ export interface FirewireProjectRecord {
 
 export interface FirewireProjectInput {
     fieldwireId?: string | null
+    worksheetData?: any
     name: string
     projectNbr: string
     address: string
@@ -43,6 +48,31 @@ export interface FirewireProjectInput {
 
 export interface FirewireProjectFieldwireMapInput {
     fieldwireId?: string | null
+}
+
+export type FirewireProjectTemplateVisibility = 'Private' | 'Public'
+
+export interface FirewireProjectTemplateRecord {
+    templateId: string
+    name: string
+    visibility: FirewireProjectTemplateVisibility
+    ownerUserId: string
+    templateData: {
+        firewireForm: Partial<FirewireProjectInput>
+        worksheetData: any
+    }
+    createdAt: string
+    createdBy: string
+    updatedAt: string
+    updatedBy: string
+}
+
+export interface FirewireProjectTemplateInput {
+    templateId?: string | null
+    name: string
+    visibility: FirewireProjectTemplateVisibility
+    firewireForm?: Partial<FirewireProjectInput> | null
+    worksheetData?: any
 }
 
 export interface ProjectListItem {
@@ -71,6 +101,9 @@ export interface ProjectListItem {
 type SqlProjectRow = {
     uuid: string
     fieldwireId: string | null
+    isManualLocked: boolean | number | null
+    manualLockedAt: Date | string | null
+    manualLockedBy: string | null
     name: string
     projectNbr: string
     address: string
@@ -82,6 +115,23 @@ type SqlProjectRow = {
     projectScope: string
     difficulty: string
     totalSqFt: number
+    createdAt: Date | string
+    createdBy: string
+    updatedAt: Date | string
+    updatedBy: string
+}
+
+type SqlWorksheetRow = {
+    projectId: string
+    worksheetJson: string | null
+}
+
+type SqlTemplateRow = {
+    templateId: string
+    name: string
+    visibility: FirewireProjectTemplateVisibility
+    ownerUserId: string
+    templateJson: string | null
     createdAt: Date | string
     createdBy: string
     updatedAt: Date | string
@@ -160,6 +210,9 @@ export class FirewireProjectRepository {
             'SELECT',
             '    uuid,',
             '    fieldwireId,',
+            '    isManualLocked,',
+            '    manualLockedAt,',
+            '    manualLockedBy,',
             '    name,',
             '    projectNbr,',
             '    address,',
@@ -193,6 +246,9 @@ export class FirewireProjectRepository {
             'SELECT',
             '    uuid,',
             '    fieldwireId,',
+            '    isManualLocked,',
+            '    manualLockedAt,',
+            '    manualLockedBy,',
             '    name,',
             '    projectNbr,',
             '    address,',
@@ -215,7 +271,13 @@ export class FirewireProjectRepository {
             .input('uuid', mssql.UniqueIdentifier, projectId)
             .query(query)
         const row = (result.recordset || [])[0]
-        return row ? this.mapSqlRow(row) : null
+        if (!row) {
+            return null
+        }
+
+        const project = this.mapSqlRow(row)
+        project.worksheetData = await this.getWorksheetData(projectId)
+        return project
     }
 
     async createFirewireProject(input: FirewireProjectInput, userId: string): Promise<FirewireProjectRecord> {
@@ -280,6 +342,10 @@ export class FirewireProjectRepository {
             .input('updatedBy', mssql.NVarChar(256), userId)
             .query(query)
 
+        if (typeof normalized.worksheetData !== 'undefined') {
+            await this.upsertWorksheetData(projectId, normalized.worksheetData, userId)
+        }
+
         const created = await this.getFirewireProject(projectId)
         if (!created) {
             throw new Error('Created project could not be reloaded.')
@@ -337,6 +403,10 @@ export class FirewireProjectRepository {
             return null
         }
 
+        if (typeof normalized.worksheetData !== 'undefined') {
+            await this.upsertWorksheetData(projectId, normalized.worksheetData, userId)
+        }
+
         return this.getFirewireProject(projectId)
     }
 
@@ -370,6 +440,128 @@ export class FirewireProjectRepository {
         return this.getFirewireProject(projectId)
     }
 
+    async updateManualLock(projectId: string, isLocked: boolean, userId: string): Promise<FirewireProjectRecord | null> {
+        await this.ensureTable()
+        if (!validateUuid(projectId)) {
+            return null
+        }
+
+        const pool = await this.getPool()
+        const query = [
+            'UPDATE dbo.firewireProjects',
+            'SET',
+            '    isManualLocked = @isManualLocked,',
+            '    manualLockedAt = CASE WHEN @isManualLocked = 1 THEN SYSUTCDATETIME() ELSE NULL END,',
+            '    manualLockedBy = CASE WHEN @isManualLocked = 1 THEN @manualLockedBy ELSE NULL END,',
+            '    updatedAt = SYSUTCDATETIME(),',
+            '    updatedBy = @updatedBy',
+            'WHERE uuid = @uuid;'
+        ].join('\n')
+
+        const result = await pool.request()
+            .input('uuid', mssql.UniqueIdentifier, projectId)
+            .input('isManualLocked', mssql.Bit, isLocked ? 1 : 0)
+            .input('manualLockedBy', mssql.NVarChar(256), isLocked ? userId : null)
+            .input('updatedBy', mssql.NVarChar(256), userId)
+            .query(query)
+
+        if (!result.rowsAffected || result.rowsAffected[0] <= 0) {
+            return null
+        }
+
+        return this.getFirewireProject(projectId)
+    }
+
+    async listProjectTemplates(userId: string): Promise<FirewireProjectTemplateRecord[]> {
+        await this.ensureTable()
+        const pool = await this.getPool()
+        const query = [
+            'SELECT',
+            '    templateId,',
+            '    name,',
+            '    visibility,',
+            '    ownerUserId,',
+            '    templateJson,',
+            '    createdAt,',
+            '    createdBy,',
+            '    updatedAt,',
+            '    updatedBy',
+            'FROM dbo.firewireProjectTemplates',
+            'WHERE visibility = @publicVisibility',
+            '   OR ownerUserId = @ownerUserId',
+            'ORDER BY visibility ASC, name ASC, updatedAt DESC;'
+        ].join('\n')
+        const result = await pool.request()
+            .input('publicVisibility', mssql.NVarChar(20), 'Public')
+            .input('ownerUserId', mssql.NVarChar(256), userId)
+            .query(query)
+        return (result.recordset || []).map((row) => this.mapTemplateRow(row))
+    }
+
+    async saveProjectTemplate(input: FirewireProjectTemplateInput, userId: string): Promise<FirewireProjectTemplateRecord> {
+        await this.ensureTable()
+        const normalized = this.normalizeTemplateInput(input)
+        const pool = await this.getPool()
+        const templateId = normalized.templateId && validateUuid(normalized.templateId)
+            ? normalized.templateId
+            : uuidv4()
+        const templateJson = JSON.stringify({
+            firewireForm: normalized.firewireForm || {},
+            worksheetData: typeof normalized.worksheetData === 'undefined' ? null : normalized.worksheetData
+        })
+        const query = [
+            'DECLARE @resolvedTemplateId UNIQUEIDENTIFIER = @templateId;',
+            '',
+            'SELECT TOP 1 @resolvedTemplateId = templateId',
+            'FROM dbo.firewireProjectTemplates',
+            'WHERE name = @name',
+            '  AND visibility = @visibility',
+            '  AND ownerUserId = @ownerUserId;',
+            '',
+            'MERGE dbo.firewireProjectTemplates AS target',
+            'USING (SELECT @resolvedTemplateId AS templateId) AS source',
+            'ON target.templateId = source.templateId',
+            'WHEN MATCHED THEN',
+            '    UPDATE SET',
+            '        name = @name,',
+            '        visibility = @visibility,',
+            '        ownerUserId = @ownerUserId,',
+            '        templateJson = @templateJson,',
+            '        updatedAt = SYSUTCDATETIME(),',
+            '        updatedBy = @updatedBy',
+            'WHEN NOT MATCHED THEN',
+            '    INSERT (templateId, name, visibility, ownerUserId, templateJson, createdBy, updatedBy)',
+            '    VALUES (@resolvedTemplateId, @name, @visibility, @ownerUserId, @templateJson, @createdBy, @updatedBy);',
+            '',
+            'SELECT',
+            '    templateId,',
+            '    name,',
+            '    visibility,',
+            '    ownerUserId,',
+            '    templateJson,',
+            '    createdAt,',
+            '    createdBy,',
+            '    updatedAt,',
+            '    updatedBy',
+            'FROM dbo.firewireProjectTemplates',
+            'WHERE templateId = @resolvedTemplateId;'
+        ].join('\n')
+        const result = await pool.request()
+            .input('templateId', mssql.UniqueIdentifier, templateId)
+            .input('name', mssql.NVarChar(200), normalized.name)
+            .input('visibility', mssql.NVarChar(20), normalized.visibility)
+            .input('ownerUserId', mssql.NVarChar(256), userId)
+            .input('templateJson', mssql.NVarChar(mssql.MAX), templateJson)
+            .input('createdBy', mssql.NVarChar(256), userId)
+            .input('updatedBy', mssql.NVarChar(256), userId)
+            .query(query)
+        const row = (result.recordset || [])[0] as SqlTemplateRow | undefined
+        if (!row) {
+            throw new Error('Template save failed.')
+        }
+        return this.mapTemplateRow(row)
+    }
+
     async ensureTable(): Promise<void> {
         const pool = await this.getPool()
         const createQuery = [
@@ -378,6 +570,9 @@ export class FirewireProjectRepository {
             '    CREATE TABLE dbo.firewireProjects (',
             '        uuid UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjects PRIMARY KEY,',
             "        fieldwireId NVARCHAR(64) NULL,",
+            '        isManualLocked BIT NOT NULL CONSTRAINT DF_firewireProjects_isManualLocked DEFAULT 0,',
+            '        manualLockedAt DATETIME2(7) NULL,',
+            '        manualLockedBy NVARCHAR(256) NULL,',
             '        name NVARCHAR(200) NOT NULL,',
             '        projectNbr NVARCHAR(100) NOT NULL,',
             "        address NVARCHAR(500) NOT NULL CONSTRAINT DF_firewireProjects_address DEFAULT N'',",
@@ -396,6 +591,35 @@ export class FirewireProjectRepository {
             '    );',
             'END;'
         ].join('\n')
+        const worksheetQuery = [
+            "IF OBJECT_ID(N'dbo.firewireProjectWorksheets', N'U') IS NULL",
+            'BEGIN',
+            '    CREATE TABLE dbo.firewireProjectWorksheets (',
+            '        projectId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjectWorksheets PRIMARY KEY,',
+            '        worksheetJson NVARCHAR(MAX) NULL,',
+            '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectWorksheets_createdAt DEFAULT SYSUTCDATETIME(),',
+            '        createdBy NVARCHAR(256) NOT NULL,',
+            '        updatedAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectWorksheets_updatedAt DEFAULT SYSUTCDATETIME(),',
+            '        updatedBy NVARCHAR(256) NOT NULL',
+            '    );',
+            'END;'
+        ].join('\n')
+        const templateQuery = [
+            "IF OBJECT_ID(N'dbo.firewireProjectTemplates', N'U') IS NULL",
+            'BEGIN',
+            '    CREATE TABLE dbo.firewireProjectTemplates (',
+            '        templateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjectTemplates PRIMARY KEY,',
+            '        name NVARCHAR(200) NOT NULL,',
+            "        visibility NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectTemplates_visibility DEFAULT N'Private',",
+            '        ownerUserId NVARCHAR(256) NOT NULL,',
+            '        templateJson NVARCHAR(MAX) NOT NULL,',
+            '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectTemplates_createdAt DEFAULT SYSUTCDATETIME(),',
+            '        createdBy NVARCHAR(256) NOT NULL,',
+            '        updatedAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectTemplates_updatedAt DEFAULT SYSUTCDATETIME(),',
+            '        updatedBy NVARCHAR(256) NOT NULL',
+            '    );',
+            'END;'
+        ].join('\n')
         const alterQuery = [
             "IF COL_LENGTH('dbo.firewireProjects', 'fieldwireId') IS NULL",
             'BEGIN',
@@ -404,9 +628,23 @@ export class FirewireProjectRepository {
             "IF COL_LENGTH('dbo.firewireProjects', 'projectStatus') IS NULL",
             'BEGIN',
             "    ALTER TABLE dbo.firewireProjects ADD projectStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_firewireProjects_projectStatus_existing DEFAULT N'Estimation';",
+            'END;',
+            "IF COL_LENGTH('dbo.firewireProjects', 'isManualLocked') IS NULL",
+            'BEGIN',
+            "    ALTER TABLE dbo.firewireProjects ADD isManualLocked BIT NOT NULL CONSTRAINT DF_firewireProjects_isManualLocked_existing DEFAULT 0;",
+            'END;',
+            "IF COL_LENGTH('dbo.firewireProjects', 'manualLockedAt') IS NULL",
+            'BEGIN',
+            "    ALTER TABLE dbo.firewireProjects ADD manualLockedAt DATETIME2(7) NULL;",
+            'END;',
+            "IF COL_LENGTH('dbo.firewireProjects', 'manualLockedBy') IS NULL",
+            'BEGIN',
+            "    ALTER TABLE dbo.firewireProjects ADD manualLockedBy NVARCHAR(256) NULL;",
             'END;'
         ].join('\n')
         await pool.request().batch(createQuery)
+        await pool.request().batch(worksheetQuery)
+        await pool.request().batch(templateQuery)
         await pool.request().batch(alterQuery)
     }
 
@@ -421,6 +659,7 @@ export class FirewireProjectRepository {
     private normalizeInput(input: FirewireProjectInput): FirewireProjectInput {
         return {
             fieldwireId: this.normalizeFieldwireId(input?.fieldwireId),
+            worksheetData: this.normalizeWorksheetData(input?.worksheetData),
             name: this.requireString(input?.name, 'name', 200),
             projectNbr: this.requireString(input?.projectNbr, 'projectNbr', 100),
             address: this.optionalString(input?.address, 500),
@@ -441,6 +680,52 @@ export class FirewireProjectRepository {
         }
         const value = input.trim()
         return value ? value.slice(0, 64) : null
+    }
+
+    private normalizeWorksheetData(input: any): any {
+        if (typeof input === 'undefined') {
+            return undefined
+        }
+        if (input === null) {
+            return null
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(input))
+        } catch {
+            throw new Error('Invalid worksheetData payload.')
+        }
+    }
+
+    private normalizeTemplateInput(input: FirewireProjectTemplateInput): FirewireProjectTemplateInput {
+        return {
+            templateId: this.normalizeOptionalUuid(input?.templateId),
+            name: this.requireString(input?.name, 'name', 200),
+            visibility: input?.visibility === 'Public' ? 'Public' : 'Private',
+            firewireForm: this.normalizeTemplateFirewireForm(input?.firewireForm),
+            worksheetData: this.normalizeWorksheetData(input?.worksheetData)
+        }
+    }
+
+    private normalizeTemplateFirewireForm(input?: Partial<FirewireProjectInput> | null): Partial<FirewireProjectInput> {
+        if (!input || typeof input !== 'object') {
+            return {}
+        }
+
+        return {
+            jobType: this.optionalString(input.jobType, 100),
+            scopeType: this.optionalString(input.scopeType, 100),
+            projectScope: this.optionalString(input.projectScope, 4000),
+            difficulty: this.optionalString(input.difficulty, 100)
+        }
+    }
+
+    private normalizeOptionalUuid(input?: string | null): string | null {
+        if (typeof input !== 'string') {
+            return null
+        }
+        const value = input.trim()
+        return value && validateUuid(value) ? value : null
     }
 
     private normalizeProjectNbr(input?: string | null): string {
@@ -494,6 +779,10 @@ export class FirewireProjectRepository {
         return {
             uuid: row.uuid,
             fieldwireId: row.fieldwireId ? String(row.fieldwireId) : null,
+            worksheetData: null,
+            isManualLocked: Boolean(row.isManualLocked),
+            manualLockedAt: this.toIso(row.manualLockedAt),
+            manualLockedBy: row.manualLockedBy ? String(row.manualLockedBy) : null,
             name: row.name,
             projectNbr: row.projectNbr,
             address: row.address,
@@ -505,6 +794,95 @@ export class FirewireProjectRepository {
             projectScope: row.projectScope,
             difficulty: row.difficulty,
             totalSqFt: Number(row.totalSqFt || 0),
+            createdAt: this.toIso(row.createdAt) || '',
+            createdBy: row.createdBy,
+            updatedAt: this.toIso(row.updatedAt) || '',
+            updatedBy: row.updatedBy
+        }
+    }
+
+    private async getWorksheetData(projectId: string): Promise<any | null> {
+        const pool = await this.getPool()
+        const query = [
+            'SELECT projectId, worksheetJson',
+            'FROM dbo.firewireProjectWorksheets',
+            'WHERE projectId = @projectId;'
+        ].join('\n')
+        const result = await pool.request()
+            .input('projectId', mssql.UniqueIdentifier, projectId)
+            .query(query)
+        const row = (result.recordset || [])[0] as SqlWorksheetRow | undefined
+        if (!row?.worksheetJson) {
+            return null
+        }
+
+        try {
+            return JSON.parse(String(row.worksheetJson))
+        } catch {
+            return null
+        }
+    }
+
+    private async upsertWorksheetData(projectId: string, worksheetData: any, userId: string): Promise<void> {
+        const pool = await this.getPool()
+
+        if (worksheetData === null) {
+            await pool.request()
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;')
+            return
+        }
+
+        const worksheetJson = JSON.stringify(worksheetData)
+        const query = [
+            'MERGE dbo.firewireProjectWorksheets AS target',
+            'USING (SELECT @projectId AS projectId) AS source',
+            'ON target.projectId = source.projectId',
+            'WHEN MATCHED THEN',
+            '    UPDATE SET',
+            '        worksheetJson = @worksheetJson,',
+            '        updatedAt = SYSUTCDATETIME(),',
+            '        updatedBy = @updatedBy',
+            'WHEN NOT MATCHED THEN',
+            '    INSERT (projectId, worksheetJson, createdBy, updatedBy)',
+            '    VALUES (@projectId, @worksheetJson, @createdBy, @updatedBy);'
+        ].join('\n')
+
+        await pool.request()
+            .input('projectId', mssql.UniqueIdentifier, projectId)
+            .input('worksheetJson', mssql.NVarChar(mssql.MAX), worksheetJson)
+            .input('createdBy', mssql.NVarChar(256), userId)
+            .input('updatedBy', mssql.NVarChar(256), userId)
+            .query(query)
+    }
+
+    private mapTemplateRow(row: SqlTemplateRow): FirewireProjectTemplateRecord {
+        let templateData: FirewireProjectTemplateRecord['templateData'] = {
+            firewireForm: {},
+            worksheetData: null
+        }
+
+        if (row.templateJson) {
+            try {
+                const parsed = JSON.parse(String(row.templateJson))
+                templateData = {
+                    firewireForm: parsed?.firewireForm && typeof parsed.firewireForm === 'object' ? parsed.firewireForm : {},
+                    worksheetData: typeof parsed?.worksheetData === 'undefined' ? null : parsed.worksheetData
+                }
+            } catch {
+                templateData = {
+                    firewireForm: {},
+                    worksheetData: null
+                }
+            }
+        }
+
+        return {
+            templateId: row.templateId,
+            name: row.name,
+            visibility: row.visibility === 'Public' ? 'Public' : 'Private',
+            ownerUserId: row.ownerUserId,
+            templateData,
             createdAt: this.toIso(row.createdAt) || '',
             createdBy: row.createdBy,
             updatedAt: this.toIso(row.updatedAt) || '',

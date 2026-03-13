@@ -20,6 +20,12 @@ export class FieldwireProjectDocuments {
             path: '/api/fieldwire/projects/:projectId/projectdocuments/upload',
             fx: async (req: express.Request, res: express.Response) => {
                 try {
+                    const bearerToken = this.resolveBearerToken(req)
+                    if (!bearerToken) {
+                        return res.status(401).json({
+                            message: 'Unauthorized'
+                        })
+                    }
                     const projectId = this.resolveString(req.params.projectId)
                     if (!projectId) {
                         return res.status(400).json({
@@ -34,18 +40,18 @@ export class FieldwireProjectDocuments {
                         })
                     }
 
-                    const client = new SharePointClient()
+                    const client = new SharePointClient(bearerToken)
                     let siteId = this.resolveString(req.body.siteId, process.env.SHAREPOINT_SITE_ID)
                     let driveId = this.resolveString(req.body.driveId, process.env.SHAREPOINT_DRIVE_ID)
                     const libraryUrl = this.resolveString(req.body.libraryUrl, process.env.SHAREPOINT_LIBRARY_URL)
-                    if ((!siteId || !driveId) && libraryUrl) {
+                    if (!driveId && libraryUrl) {
                         const resolved = await client.resolveTargetFromLibraryUrl(libraryUrl)
                         siteId = siteId || resolved.siteId
                         driveId = driveId || resolved.driveId
                     }
-                    if (!siteId || !driveId) {
+                    if (!driveId) {
                         return res.status(400).json({
-                            message: 'Missing target values. Provide siteId/driveId or set SHAREPOINT_SITE_ID/SHAREPOINT_DRIVE_ID. You can also provide libraryUrl or set SHAREPOINT_LIBRARY_URL for automatic resolution.'
+                            message: 'Missing target values. Provide driveId or set SHAREPOINT_DRIVE_ID. You can also provide libraryUrl or set SHAREPOINT_LIBRARY_URL for automatic resolution.'
                         })
                     }
 
@@ -153,5 +159,9 @@ export class FieldwireProjectDocuments {
             }
         }
         return undefined
+    }
+
+    private static resolveBearerToken(req: express.Request): string | undefined {
+        return (req as any).bearerToken
     }
 }

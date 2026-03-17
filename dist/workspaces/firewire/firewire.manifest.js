@@ -5,6 +5,7 @@ const base_manifest_1 = require("../../core/routing/base.manifest");
 const firewire_data_1 = require("./data/firewire.data");
 const firewire_project_settings_data_1 = require("./data/firewire.project-settings.data");
 const firewire_projects_data_1 = require("./data/firewire.projects.data");
+const firewire_user_preferences_data_1 = require("./data/firewire.user-preferences.data");
 class FirewireManifest extends base_manifest_1.BaseManifest {
     constructor() {
         super();
@@ -15,9 +16,11 @@ class FirewireManifest extends base_manifest_1.BaseManifest {
         this.items.push(...firewire_data_1.FirewireData.manifestItems);
         this.items.push(...firewire_project_settings_data_1.FirewireProjectSettingsData.manifestItems);
         this.items.push(...firewire_projects_data_1.FirewireProjectsData.manifestItems);
+        this.items.push(...firewire_user_preferences_data_1.FirewireUserPreferencesData.manifestItems);
         this.items.push(...firewire_data_1.FirewireData.legacyFieldwireAliasItems);
         this.items.push(...firewire_project_settings_data_1.FirewireProjectSettingsData.legacyFieldwireAliasItems);
         this.items.push(...firewire_projects_data_1.FirewireProjectsData.legacyFieldwireAliasItems);
+        this.items.push(...firewire_user_preferences_data_1.FirewireUserPreferencesData.legacyFieldwireAliasItems);
     }
     attach(app) {
         return super.attach(app);

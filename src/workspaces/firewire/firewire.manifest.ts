@@ -4,6 +4,7 @@ import { AuthStrategy } from '../../core/auth/authstrategy'
 import { BaseManifest } from '../../core/routing/base.manifest'
 import { IManifestItem } from '../../core/routing/imanifestitem'
 import { FirewireData } from './data/firewire.data'
+import { FirewireAboutData } from './data/firewire.about.data'
 import { FirewireProjectSettingsData } from './data/firewire.project-settings.data'
 import { FirewireProjectsData } from './data/firewire.projects.data'
 import { FirewireUserPreferencesData } from './data/firewire.user-preferences.data'
@@ -11,10 +12,12 @@ import { FirewireUserPreferencesData } from './data/firewire.user-preferences.da
 export default class FirewireManifest extends BaseManifest {
     constructor() {
         super()
+        this.items.push(...FirewireAboutData.manifestItems)
         this.items.push(...FirewireData.manifestItems)
         this.items.push(...FirewireProjectSettingsData.manifestItems)
         this.items.push(...FirewireProjectsData.manifestItems)
         this.items.push(...FirewireUserPreferencesData.manifestItems)
+        this.items.push(...FirewireAboutData.legacyFieldwireAliasItems)
         this.items.push(...FirewireData.legacyFieldwireAliasItems)
         this.items.push(...FirewireProjectSettingsData.legacyFieldwireAliasItems)
         this.items.push(...FirewireProjectsData.legacyFieldwireAliasItems)

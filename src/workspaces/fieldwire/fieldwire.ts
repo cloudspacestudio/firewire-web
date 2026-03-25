@@ -323,7 +323,8 @@ export class FieldwireSDK {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.get(`projects/${projectId}/teams`, {
-                    "Fieldwire-Filter": "active"
+                    "Fieldwire-Filter": "active",
+                    "Fieldwire-Per-Page": 1000
                 })
                 return resolve(result)
             } catch (err) {

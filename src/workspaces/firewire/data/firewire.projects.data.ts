@@ -105,6 +105,85 @@ export class FirewireProjectsData {
         },
         {
             method: 'get',
+            path: '/api/firewire/projects/map-config',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const subscriptionKey = (process.env.AZURE_MAPS_SUBSCRIPTION_KEY || process.env.AZURE_MAPS_KEY || '').trim()
+                        return res.status(200).json({
+                            data: {
+                                subscriptionKey: subscriptionKey || null
+                            }
+                        })
+                    } catch (err: Error | any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/firewire/projects/weather-forecast',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const latitude = Number(req.query.latitude)
+                        const longitude = Number(req.query.longitude)
+                        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                            return res.status(400).json({
+                                message: 'Invalid payload: latitude and longitude query parameters are required.'
+                            })
+                        }
+
+                        const subscriptionKey = (process.env.AZURE_MAPS_SUBSCRIPTION_KEY || process.env.AZURE_MAPS_KEY || '').trim()
+                        if (!subscriptionKey) {
+                            return res.status(200).json({
+                                data: {
+                                    forecast: [],
+                                    status: 'not-configured'
+                                }
+                            })
+                        }
+
+                        const apiVersion = (process.env.AZURE_MAPS_WEATHER_API_VERSION || '1.1').trim()
+                        const baseUrl = (process.env.AZURE_MAPS_BASE_URL || 'https://atlas.microsoft.com').trim().replace(/\/$/, '')
+                        const url = `${baseUrl}/weather/forecast/daily/json?api-version=${encodeURIComponent(apiVersion)}&subscription-key=${encodeURIComponent(subscriptionKey)}&query=${encodeURIComponent(`${latitude},${longitude}`)}&duration=10&language=en-US&unit=imperial`
+
+                        const response = await fetch(url, {
+                            method: 'GET',
+                            headers: {
+                                Accept: 'application/json'
+                            }
+                        })
+
+                        if (!response.ok) {
+                            return res.status(200).json({
+                                data: {
+                                    forecast: [],
+                                    status: 'unavailable'
+                                }
+                            })
+                        }
+
+                        const payload = await response.json() as any
+                        return res.status(200).json({
+                            data: {
+                                forecast: normalizeDailyForecastPayload(payload),
+                                status: 'ok'
+                            }
+                        })
+                    } catch (err: Error | any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'get',
             path: '/api/firewire/projects/firewire/:projectId',
             fx: (req: express.Request, res: express.Response) => {
                 return new Promise(async(resolve, reject) => {
@@ -252,6 +331,7 @@ function normalizePayload(body: any): FirewireProjectInput {
         address: body?.address,
         bidDueDate: body?.bidDueDate,
         projectStatus: body?.projectStatus,
+        projectType: body?.projectType,
         salesman: body?.salesman,
         jobType: body?.jobType,
         scopeType: body?.scopeType,
@@ -300,5 +380,83 @@ function resolveUserId(req: express.Request): string {
 
 function isValidationError(err: any): boolean {
     const message = typeof err?.message === 'string' ? err.message.toLowerCase() : ''
-    return message.includes('missing ') || message.includes('invalid ') || message.includes('must be')
+    return message.includes('missing ')
+        || message.includes('invalid ')
+        || message.includes('must be')
+        || message.includes('cannot be changed')
+}
+
+function normalizeDailyForecastPayload(payload: any): Array<{
+    date: string | null
+    dayLabel: string
+    phrase: string
+    iconCode: number | null
+    minTemp: number | null
+    maxTemp: number | null
+    precipitationProbability: number | null
+}> {
+    const source = Array.isArray(payload?.forecasts)
+        ? payload.forecasts
+        : Array.isArray(payload?.dailyForecasts)
+            ? payload.dailyForecasts
+            : Array.isArray(payload?.results)
+                ? payload.results
+                : []
+
+    return source.slice(0, 7).map((entry: any) => {
+        const dateValue = firstString(entry?.date, entry?.validDate, entry?.summary?.date, entry?.day?.date)
+        const parsedDate = dateValue ? new Date(dateValue) : null
+        const hasParsedDate = !!parsedDate && !Number.isNaN(parsedDate.getTime())
+
+        return {
+            date: hasParsedDate ? parsedDate!.toISOString() : null,
+            dayLabel: hasParsedDate
+                ? new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(parsedDate!)
+                : '',
+            phrase: firstString(
+                entry?.day?.iconPhrase,
+                entry?.day?.shortPhrase,
+                entry?.phrase,
+                entry?.summary?.phrase,
+                entry?.night?.iconPhrase
+            ) || 'Forecast Pending',
+            iconCode: firstNumber(entry?.day?.iconCode, entry?.iconCode, entry?.summary?.iconCode),
+            minTemp: firstNumber(
+                entry?.temperature?.minimum?.value,
+                entry?.temperature?.min?.value,
+                entry?.night?.temperature?.value,
+                entry?.realFeelTemperature?.minimum?.value
+            ),
+            maxTemp: firstNumber(
+                entry?.temperature?.maximum?.value,
+                entry?.temperature?.max?.value,
+                entry?.day?.temperature?.value,
+                entry?.realFeelTemperature?.maximum?.value
+            ),
+            precipitationProbability: firstNumber(
+                entry?.day?.precipitationProbability,
+                entry?.precipitationProbability,
+                entry?.hoursOfRain?.value
+            )
+        }
+    })
+}
+
+function firstString(...values: any[]): string {
+    for (const value of values) {
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim()
+        }
+    }
+    return ''
+}
+
+function firstNumber(...values: any[]): number | null {
+    for (const value of values) {
+        const numeric = Number(value)
+        if (Number.isFinite(numeric)) {
+            return numeric
+        }
+    }
+    return null
 }

@@ -76,6 +76,14 @@ function normalizePayload(body: any): FirewireUserPreferencesPayload {
             gradientTo: body?.homePage?.gradientTo,
             gradientAngle: body?.homePage?.gradientAngle
         },
+        projectMap: {
+            version: body?.projectMap?.version,
+            style: body?.projectMap?.style,
+            dimension: body?.projectMap?.dimension,
+            showRoadDetails: body?.projectMap?.showRoadDetails,
+            showBuildingFootprints: body?.projectMap?.showBuildingFootprints,
+            autoFitPins: body?.projectMap?.autoFitPins
+        },
         profile: {
             avatarDataUrl: body?.profile?.avatarDataUrl
         }

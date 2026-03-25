@@ -13,6 +13,14 @@ export interface FirewireUserPreferencesPayload {
         gradientTo: string
         gradientAngle: number
     }
+    projectMap: {
+        version: number
+        style: string
+        dimension: string
+        showRoadDetails: boolean
+        showBuildingFootprints: boolean
+        autoFitPins: boolean
+    }
     profile: {
         avatarDataUrl: string | null
     }
@@ -121,6 +129,7 @@ export class FirewireUserPreferencesRepository {
     private normalizePayload(payload: FirewireUserPreferencesPayload | null | undefined): FirewireUserPreferencesPayload {
         const defaults = this.defaultPreferences()
         const homePage = payload?.homePage && typeof payload.homePage === 'object' ? payload.homePage : defaults.homePage
+        const projectMap = payload?.projectMap && typeof payload.projectMap === 'object' ? payload.projectMap : defaults.projectMap
         const profile = payload?.profile && typeof payload.profile === 'object' ? payload.profile : defaults.profile
 
         return {
@@ -133,6 +142,14 @@ export class FirewireUserPreferencesRepository {
                 gradientFrom: this.normalizeHexColor(homePage.gradientFrom, '#09111d'),
                 gradientTo: this.normalizeHexColor(homePage.gradientTo, '#060a12'),
                 gradientAngle: this.normalizeAngle(homePage.gradientAngle)
+            },
+            projectMap: {
+                version: this.normalizeProjectMapVersion(projectMap.version),
+                style: this.normalizeProjectMapStyle(projectMap.style),
+                dimension: this.normalizeProjectMapDimension(projectMap.dimension),
+                showRoadDetails: projectMap.showRoadDetails !== false,
+                showBuildingFootprints: projectMap.showBuildingFootprints !== false,
+                autoFitPins: projectMap.autoFitPins !== false
             },
             profile: {
                 avatarDataUrl: this.normalizeAvatarDataUrl(profile.avatarDataUrl)
@@ -190,6 +207,27 @@ export class FirewireUserPreferencesRepository {
         return Math.max(0, Math.min(360, Math.round(value)))
     }
 
+    private normalizeProjectMapVersion(input: unknown): number {
+        const value = Number(input)
+        return Number.isFinite(value) && value >= 1 ? Math.round(value) : 1
+    }
+
+    private normalizeProjectMapStyle(input: unknown): string {
+        switch (input) {
+            case 'road':
+            case 'satellite':
+            case 'road_shaded_relief':
+            case 'night':
+                return String(input)
+            default:
+                return 'night'
+        }
+    }
+
+    private normalizeProjectMapDimension(input: unknown): string {
+        return input === '3d' ? '3d' : '2d'
+    }
+
     private normalizeAvatarDataUrl(input: unknown): string | null {
         if (typeof input !== 'string') {
             return null
@@ -230,6 +268,14 @@ export class FirewireUserPreferencesRepository {
                 gradientFrom: '#09111d',
                 gradientTo: '#060a12',
                 gradientAngle: 135
+            },
+            projectMap: {
+                version: 1,
+                style: 'night',
+                dimension: '2d',
+                showRoadDetails: true,
+                showBuildingFootprints: true,
+                autoFitPins: true
             },
             profile: {
                 avatarDataUrl: null

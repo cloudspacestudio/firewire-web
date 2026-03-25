@@ -16,7 +16,7 @@ export class FirewireUserPreferencesData {
                         const repository = new FirewireUserPreferencesRepository(req.app)
                         const result = await repository.getUserPreferences(userId)
                         return res.status(200).json({
-                            data: result
+                            data: sanitizePreferencesRecord(result)
                         })
                     } catch (err: Error | any) {
                         return res.status(500).json({
@@ -37,7 +37,54 @@ export class FirewireUserPreferencesData {
                         const repository = new FirewireUserPreferencesRepository(req.app)
                         const result = await repository.saveUserPreferences(userId, payload, userId)
                         return res.status(200).json({
-                            data: result
+                            data: sanitizePreferencesRecord(result)
+                        })
+                    } catch (err: Error | any) {
+                        const statusCode = isValidationError(err) ? 400 : 500
+                        return res.status(statusCode).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/user-preferences/workspace-lock/verify',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const userId = resolveUserId(req)
+                        const repository = new FirewireUserPreferencesRepository(req.app)
+                        const valid = await repository.verifyWorkspacePin(userId, String(req.body?.pin || ''))
+                        return res.status(200).json({
+                            data: { valid }
+                        })
+                    } catch (err: Error | any) {
+                        const statusCode = isValidationError(err) ? 400 : 500
+                        return res.status(statusCode).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'put',
+            path: '/api/firewire/user-preferences/workspace-lock/pin',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const userId = resolveUserId(req)
+                        const repository = new FirewireUserPreferencesRepository(req.app)
+                        const result = await repository.saveWorkspacePin(
+                            userId,
+                            String(req.body?.newPin || ''),
+                            userId,
+                            typeof req.body?.currentPin === 'string' ? req.body.currentPin : null
+                        )
+                        return res.status(200).json({
+                            data: sanitizePreferencesRecord(result)
                         })
                     } catch (err: Error | any) {
                         const statusCode = isValidationError(err) ? 400 : 500
@@ -86,6 +133,21 @@ function normalizePayload(body: any): FirewireUserPreferencesPayload {
         },
         profile: {
             avatarDataUrl: body?.profile?.avatarDataUrl
+        },
+        workspaceLock: {
+            hasPin: body?.workspaceLock?.hasPin
+        }
+    }
+}
+
+function sanitizePreferencesRecord(record: any): any {
+    return {
+        ...record,
+        preferences: {
+            ...record.preferences,
+            workspaceLock: {
+                hasPin: !!record?.preferences?.workspaceLock?.hasPin
+            }
         }
     }
 }
@@ -113,5 +175,5 @@ function resolveUserId(req: express.Request): string {
 
 function isValidationError(err: any): boolean {
     const message = typeof err?.message === 'string' ? err.message.toLowerCase() : ''
-    return message.includes('invalid ') || message.includes('too large')
+    return message.includes('invalid ') || message.includes('too large') || message.includes('pin')
 }

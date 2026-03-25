@@ -1,90 +1,146 @@
-# MEAN(S) Web
-Express JS implementation on Node JS supporting patterns for the serving of Angular SPA with REST apis communicating with both Mongo and any form of SQL server (MS Sql, Azure Sql, Postgres etc.)
+# firewire-web
 
-## Convention over Configuration
-Creating entities in the apis folder that implement the IRoutable interface will be automatically bootstrapped into the application at the time of startup. In this way consumers can extend this library and add content without collision with core framework components.
+Backend API for the Firewire Angular SPA.
 
-## CONFIG
+This service:
+- exposes `/api/firewire/*` and `/api/fieldwire/*` endpoints
+- validates Entra bearer tokens for all `/api/*` routes
+- connects to the Firewire SQL Server database
+- optionally integrates with Azure Maps and SharePoint
 
-### Simple Config Values
-The following .env (environment variables) are optional. If you do not provide an APPNAME a new GUID will be used instead. Lack of PORT will use the hosting environment default value.
+## Required Environment Variables
 
-| name | note |
-|------|------|
-| APPNAME | An application name to use when connecting to mongo or postgres for use in the remote systems logs and analytics |
-| PORT | The port to run the web service on. Usually only relevant in development scenarios |
+These variables are required for the API to start and serve authenticated requests.
 
-### JWT Generation Required
-The following keys are required if using JWT authentication like basic authentication where a JWT token must be composed and verified inside a contained environment.
-| name | note |
-|------|------|
-| JWTSECRET | When using JWT token generation techniques, use this value as the secret key used for JWT composition and verification |
+| Variable | Purpose |
+|---|---|
+| `MISSIONSECRET` | Required startup secret checked during bootstrap. The server refuses to start without it. |
+| `SQLSRV` | SQL Server host name used for the primary Firewire database connection. |
+| `SQLDB` | SQL Server database name used by the application. |
+| `SQLUSER` | SQL Server login for the application. |
+| `SQLPWD` | Password for `SQLUSER`. |
+| `ENTRA_TENANT_ID` | Microsoft Entra tenant ID used to validate incoming bearer tokens. Legacy alias: `FIREWIRETENANTID`. |
+| `ENTRA_API_AUDIENCE` | Accepted Entra token audience / app ID for the API. Legacy alias: `FIREWIRECLIENTID`. |
 
-### Mongo Database
-If using Mongo DB as a backend persistent datastore, these keys are required to connect and use that database.
-| name | note |
-|------|------|
-| MONGOURL | Remote URI from mongo database confirmation that typically includes usernames and passwords embedded with mongo port etc. This is the equivalent of the Mongo database connection string |
-| MONGODBNAME | The database name residing at the above connection string endpoint |
+## Required for Auth Behavior
 
-### Postgres Database
-If using Postgres DB as a backend persistent datastore, these keys are required to connect and use that database.
-| name | note |
-|------|------|
-| PGUSER | Postgres database username |
-| PGPWD | Postgres database user password. It should go without saying this value along with other sensitive values should be stored securely in whatever hosting service is being used (such as KeyVault in Azure) |
-| PGHOST | Host name is the URL (or localhost) of the postgres database |
-| PGPORT | The port postgres is listening for requests on |
-| PGDATABASE | The database name for the postgres database |
+These are not strictly required because defaults exist, but they are important to understand.
 
-### SQL Server Database
-If using SQL Server DB as a backend persistent datastore, these keys are required to connect and use that database.
-| name | note |
-|------|------|
-| SQLUSER | User to connect to sql server database |
-| SQLPWD | Above user's password |
-| SQLDB | Default database to connect to in sql server |
-| SQLSRV | Remote URI including protocol and port for sql server database |
+| Variable | Purpose |
+|---|---|
+| `PORT` | HTTP port for the API. Defaults to `3000`. |
+| `ENTRA_REQUIRED_SCOPES` | Comma-separated scopes or app roles accepted by the API. Defaults to `user_impersonation`. |
 
-## DATABASE SUPPORT FOR DEVELOPMENT
-You can install local databases for free to use with development
+## Optional Azure Maps Variables
 
-### SQL Server
-https://www.microsoft.com/en-us/sql-server/sql-server-downloads
-firewire-dev.database.windows.net
+These are required only if you want address geocoding, project map configuration, or weather forecast features to work.
 
-## Manifest Pattern
-Create files in the workspaces directory that include in their name "manifest" and inherit (extend) BaseManifest class. They must export a default class that extends BaseManifest as demonstrated below
-````
-import * as express from 'express'
+| Variable | Purpose |
+|---|---|
+| `AZURE_MAPS_SUBSCRIPTION_KEY` | Primary Azure Maps key used by geocoding, weather, and the authenticated map-config endpoint. |
+| `AZURE_MAPS_KEY` | Fallback alias for the Azure Maps key if `AZURE_MAPS_SUBSCRIPTION_KEY` is not set. |
+| `AZURE_MAPS_BASE_URL` | Override for the Azure Maps base URL. Defaults to `https://atlas.microsoft.com`. |
+| `AZURE_MAPS_API_VERSION` | API version for address geocoding/normalization. Defaults to `1.0`. |
+| `AZURE_MAPS_WEATHER_API_VERSION` | API version for weather forecast calls. Defaults to `1.1`. |
 
-import { AuthStrategy } from "../core/auth/authstrategy";
-import { BaseManifest } from "../core/routing/base.manifest";
-import { IManifestItem } from "../core/routing/imanifestitem";
+If these are not configured:
+- map key endpoints return no key
+- address geocoding falls back to `Not Configured`
+- weather endpoints return `not-configured`
 
-export default class TestManifest extends BaseManifest {
+## Optional SharePoint Variables
 
-    appname: string = 'test'
-    authStrategy: AuthStrategy = AuthStrategy.none
-    dependencies: string[] = []
-    items: IManifestItem[] = [
-        {
-            method: 'get',
-            path: '/api/test',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        return res.status(200).json({
-                            message: 'Hello World'
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        }
-    ]
-}
-````
+These are required only for SharePoint-backed library browsing and document uploads.
+
+| Variable | Purpose |
+|---|---|
+| `SHAREPOINT_TENANT_ID` | Entra tenant ID for the SharePoint / Microsoft Graph app registration. |
+| `SHAREPOINT_CLIENT_ID` | Client ID for the SharePoint / Graph app registration. |
+| `SHAREPOINT_CLIENT_SECRET` | Client secret for the SharePoint / Graph app registration. |
+| `SHAREPOINT_SITE_ID` | Default SharePoint site ID used by upload/list/read endpoints when a request does not provide one. |
+| `SHAREPOINT_DRIVE_ID` | Default SharePoint document library drive ID used by upload/list/read endpoints when a request does not provide one. |
+| `SHAREPOINT_LIBRARY_URL` | Default SharePoint library URL used to resolve `siteId` and `driveId` when those values are not passed directly. |
+| `SHAREPOINT_PROJECTDOCUMENTS_FOLDER_ROOT` | Root folder path used by the project-documents upload endpoint when constructing project folders. |
+| `SHAREPOINT_MAX_UPLOAD_BYTES` | Maximum allowed upload size in bytes for SharePoint-backed document uploads. Defaults to `26214400` (25 MB). |
+
+## Optional Legacy / Framework Variables
+
+These are supported by the underlying framework, but they are not required for the current Firewire SQL Server setup.
+
+| Variable | Purpose |
+|---|---|
+| `APPNAME` | Optional app name used by some database clients for logging/telemetry. |
+| `JWTSECRET` | Used only by the legacy/basic JWT authority code path, not by the Entra bearer-token API flow. |
+| `MONGOURL` | Enables the optional MongoDB connection. |
+| `MONGODBNAME` | Database name for the optional MongoDB connection. |
+| `PGHOST` | Enables the optional PostgreSQL connection. |
+| `PGPORT` | Port for the optional PostgreSQL connection. |
+| `PGDATABASE` | Database name for the optional PostgreSQL connection. |
+| `PGUSER` | Username for the optional PostgreSQL connection. |
+| `PGPWD` | Password for the optional PostgreSQL connection. |
+| `ENTRA_AUTHORITY` | Exposed by the About endpoint for diagnostics/config display. |
+| `REQUIRED_SCOPE` | Referenced by the About endpoint for diagnostics/config display. |
+| `FIREWIRE_REQUIRED_SCOPE` | Referenced by the About endpoint for diagnostics/config display. |
+
+## SQL Server Migration Utility Variables
+
+These are only needed when running:
+
+```bash
+npm run db:migrate:sqlserver
+```
+
+| Variable | Purpose |
+|---|---|
+| `MIG_SRC_SQL_SERVER` | Source SQL Server host. |
+| `MIG_SRC_SQL_DATABASE` | Source database name. |
+| `MIG_SRC_SQL_USER` | Source database user. |
+| `MIG_SRC_SQL_PASSWORD` | Source database password. |
+| `MIG_SRC_SQL_PORT` | Source SQL Server port. Defaults to `1433`. |
+| `MIG_SRC_SQL_ENCRYPT` | Source connection encrypt flag. Defaults to `true`. |
+| `MIG_SRC_SQL_TRUST_SERVER_CERTIFICATE` | Source trust-server-certificate flag. Defaults to `false`. |
+| `MIG_DST_SQL_SERVER` | Target SQL Server host. |
+| `MIG_DST_SQL_DATABASE` | Target database name. |
+| `MIG_DST_SQL_USER` | Target database user. |
+| `MIG_DST_SQL_PASSWORD` | Target database password. |
+| `MIG_DST_SQL_PORT` | Target SQL Server port. Defaults to `1433`. |
+| `MIG_DST_SQL_ENCRYPT` | Target connection encrypt flag. Defaults to `true`. |
+| `MIG_DST_SQL_TRUST_SERVER_CERTIFICATE` | Target trust-server-certificate flag. Defaults to `false`. |
+| `MIG_SCHEMA` | Schema to migrate. Defaults to `dbo`. |
+| `MIG_TABLES` | Optional comma-separated table filter. If omitted, all tables in the schema are migrated. |
+
+## Minimal Local Development Example
+
+```env
+PORT=3000
+MISSIONSECRET=change-me
+
+SQLSRV=your-sql-server-host
+SQLDB=firewire
+SQLUSER=your-sql-user
+SQLPWD=your-sql-password
+
+ENTRA_TENANT_ID=your-entra-tenant-id
+ENTRA_API_AUDIENCE=your-api-app-id
+ENTRA_REQUIRED_SCOPES=user_impersonation
+```
+
+Optional additions:
+
+```env
+AZURE_MAPS_SUBSCRIPTION_KEY=your-azure-maps-key
+
+SHAREPOINT_TENANT_ID=your-tenant-id
+SHAREPOINT_CLIENT_ID=your-client-id
+SHAREPOINT_CLIENT_SECRET=your-client-secret
+SHAREPOINT_SITE_ID=your-site-id
+SHAREPOINT_DRIVE_ID=your-drive-id
+SHAREPOINT_LIBRARY_URL=https://yourtenant.sharepoint.com/sites/yoursite/Shared%20Documents
+SHAREPOINT_PROJECTDOCUMENTS_FOLDER_ROOT=Firewire Projects
+```
+
+## Start the API
+
+```bash
+npm start
+```

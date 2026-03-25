@@ -1,5 +1,6 @@
 import * as express from 'express'
 import * as mssql from 'mssql'
+import { createHash } from 'crypto'
 import { MsSqlServerDb } from '../../../core/databases/mssqldb'
 
 export interface FirewireUserPreferencesPayload {
@@ -23,6 +24,10 @@ export interface FirewireUserPreferencesPayload {
     }
     profile: {
         avatarDataUrl: string | null
+    }
+    workspaceLock: {
+        hasPin: boolean
+        pinHash?: string | null
     }
 }
 
@@ -82,7 +87,8 @@ export class FirewireUserPreferencesRepository {
 
     async saveUserPreferences(userId: string, payload: FirewireUserPreferencesPayload, actorUserId: string): Promise<FirewireUserPreferencesRecord> {
         await this.ensureTable()
-        const normalized = this.normalizePayload(payload)
+        const existingRecord = await this.getUserPreferences(userId)
+        const normalized = this.normalizePayload(payload, existingRecord.preferences)
         const pool = await this.getPool()
         const query = [
             'MERGE dbo.firewireUserPreferences AS target',
@@ -108,6 +114,39 @@ export class FirewireUserPreferencesRepository {
         return this.getUserPreferences(userId)
     }
 
+    async verifyWorkspacePin(userId: string, pin: string): Promise<boolean> {
+        const record = await this.getUserPreferences(userId)
+        const currentHash = record.preferences.workspaceLock.pinHash || null
+        if (!currentHash) {
+            return false
+        }
+        return currentHash === this.hashWorkspacePin(userId, pin)
+    }
+
+    async saveWorkspacePin(userId: string, newPin: string, actorUserId: string, currentPin?: string | null): Promise<FirewireUserPreferencesRecord> {
+        await this.ensureTable()
+        const record = await this.getUserPreferences(userId)
+        const currentHash = record.preferences.workspaceLock.pinHash || null
+        const normalizedNewPin = this.normalizeWorkspacePin(newPin)
+
+        if (currentHash) {
+            const normalizedCurrentPin = this.normalizeWorkspacePin(currentPin, true)
+            if (!normalizedCurrentPin || currentHash !== this.hashWorkspacePin(userId, normalizedCurrentPin)) {
+                throw new Error('Current PIN is incorrect.')
+            }
+        }
+
+        const updatedPreferences = this.normalizePayload({
+            ...record.preferences,
+            workspaceLock: {
+                hasPin: true,
+                pinHash: this.hashWorkspacePin(userId, normalizedNewPin)
+            }
+        }, record.preferences)
+
+        return this.saveUserPreferences(userId, updatedPreferences, actorUserId)
+    }
+
     async ensureTable(): Promise<void> {
         const pool = await this.getPool()
         const query = [
@@ -126,11 +165,15 @@ export class FirewireUserPreferencesRepository {
         await pool.request().batch(query)
     }
 
-    private normalizePayload(payload: FirewireUserPreferencesPayload | null | undefined): FirewireUserPreferencesPayload {
+    private normalizePayload(payload: FirewireUserPreferencesPayload | null | undefined, existing?: FirewireUserPreferencesPayload | null): FirewireUserPreferencesPayload {
         const defaults = this.defaultPreferences()
         const homePage = payload?.homePage && typeof payload.homePage === 'object' ? payload.homePage : defaults.homePage
         const projectMap = payload?.projectMap && typeof payload.projectMap === 'object' ? payload.projectMap : defaults.projectMap
         const profile = payload?.profile && typeof payload.profile === 'object' ? payload.profile : defaults.profile
+        const workspaceLock = payload?.workspaceLock && typeof payload.workspaceLock === 'object' ? payload.workspaceLock : existing?.workspaceLock || defaults.workspaceLock
+        const existingPinHash = typeof existing?.workspaceLock?.pinHash === 'string' ? existing.workspaceLock.pinHash : null
+        const requestedPinHash = typeof workspaceLock.pinHash === 'string' && workspaceLock.pinHash.trim() ? workspaceLock.pinHash.trim() : null
+        const pinHash = requestedPinHash || existingPinHash
 
         return {
             homePage: {
@@ -153,6 +196,10 @@ export class FirewireUserPreferencesRepository {
             },
             profile: {
                 avatarDataUrl: this.normalizeAvatarDataUrl(profile.avatarDataUrl)
+            },
+            workspaceLock: {
+                hasPin: !!pinHash,
+                pinHash
             }
         }
     }
@@ -245,6 +292,29 @@ export class FirewireUserPreferencesRepository {
         return value
     }
 
+    private normalizeWorkspacePin(input: unknown, allowBlank = false): string {
+        if (typeof input !== 'string') {
+            if (allowBlank) {
+                return ''
+            }
+            throw new Error('PIN must be provided.')
+        }
+        const value = input.trim()
+        if (!value && allowBlank) {
+            return ''
+        }
+        if (!/^\d{4,8}$/.test(value)) {
+            throw new Error('PIN must be 4 to 8 numeric digits.')
+        }
+        return value
+    }
+
+    private hashWorkspacePin(userId: string, pin: string): string {
+        return createHash('sha256')
+            .update(`${userId.trim().toLowerCase()}::${pin}`)
+            .digest('hex')
+    }
+
     private parsePreferences(input: string | null): FirewireUserPreferencesPayload {
         if (!input) {
             return this.defaultPreferences()
@@ -279,6 +349,10 @@ export class FirewireUserPreferencesRepository {
             },
             profile: {
                 avatarDataUrl: null
+            },
+            workspaceLock: {
+                hasPin: false,
+                pinHash: null
             }
         }
     }

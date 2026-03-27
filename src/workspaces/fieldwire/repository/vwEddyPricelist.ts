@@ -1,4 +1,6 @@
 export interface VwEddyPricelist {
+    vendorId?: string | null
+    vendorName?: string | null
     ParentCategory: string
     Category: string
     PartNumber: string

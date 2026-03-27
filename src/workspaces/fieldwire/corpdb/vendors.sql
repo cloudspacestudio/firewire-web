@@ -3,6 +3,9 @@ CREATE TABLE [dbo].[vendors](
 	[name] [nvarchar](100) NOT NULL,
 	[desc] [nvarchar](500) NULL,
 	[link] [nvarchar](500) NULL,
+	[importConfigJson] [nvarchar](max) NULL,
+	[logoFileName] [nvarchar](260) NULL,
+	[logoDataUrl] [nvarchar](max) NULL,
 	[createat] [date] NOT NULL,
 	[createby] [nvarchar](40) NOT NULL,
 	[updateat] [date] NOT NULL,
@@ -28,4 +31,3 @@ GO
 
 ALTER TABLE [dbo].[vendors] ADD  DEFAULT ('system') FOR [updateby]
 GO
-

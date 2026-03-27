@@ -3,4 +3,7 @@ export interface Vendor {
     name: string
     desc: string
     link: string
+    importConfigJson?: string | null
+    logoFileName?: string | null
+    logoDataUrl?: string | null
 }

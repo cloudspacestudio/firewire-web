@@ -3,6 +3,11 @@ CREATE TABLE [dbo].[categories](
 	[name] [nvarchar](100) NOT NULL,
 	[shortName] [nvarchar](50) NOT NULL,
 	[handle] [nvarchar](10) NOT NULL,
+	[defaultLabor] [decimal](18, 2) NULL,
+	[includeOnFloorplan] [bit] NOT NULL,
+	[slcAddress] [nvarchar](50) NULL,
+	[speakerAddress] [nvarchar](50) NULL,
+	[strobeAddress] [nvarchar](50) NULL,
 	[createat] [date] NOT NULL,
 	[createby] [nvarchar](40) NOT NULL,
 	[updateat] [date] NOT NULL,
@@ -20,6 +25,9 @@ GO
 ALTER TABLE [dbo].[categories] ADD  DEFAULT (getdate()) FOR [createat]
 GO
 
+ALTER TABLE [dbo].[categories] ADD DEFAULT ((0)) FOR [includeOnFloorplan]
+GO
+
 ALTER TABLE [dbo].[categories] ADD  DEFAULT ('system') FOR [createby]
 GO
 
@@ -28,4 +36,3 @@ GO
 
 ALTER TABLE [dbo].[categories] ADD  DEFAULT ('system') FOR [updateby]
 GO
-

@@ -46,7 +46,7 @@ export class Bootstrap {
                 console.log(`miSSion.webserver: helmet applied`)
                 app.set('view engine', 'ejs')
                 console.log(`miSSion.webserver: view engine ejs initialized`)
-                app.use(express.json())
+                app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '50mb' }))
                 console.log(`miSSion.webserver: json support enabled`)
                 
                 // #region Mongo DB Setup

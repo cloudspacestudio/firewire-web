@@ -5,6 +5,7 @@ import { SqlDb } from '../../fieldwire/repository/sqldb'
 import { Vendor } from '../../fieldwire/repository/vendor'
 import { VwEddyPricelist } from '../../fieldwire/repository/vwEddyPricelist'
 import { EddyPricelist } from '../../fieldwire/repository/EddyPricelist'
+import { AzureBlobDocumentStorage } from './azure-blob-document-storage'
 
 const uploadToMemory = multer({
     storage: multer.memoryStorage(),
@@ -17,6 +18,13 @@ const uploadVendorLogoToMemory = multer({
     storage: multer.memoryStorage(),
     limits: {
         fileSize: Number(process.env.FIREWIRE_VENDOR_LOGO_MAX_BYTES || 2 * 1024 * 1024)
+    }
+}).single('file')
+
+const uploadDocLibraryFileToMemory = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: Number(process.env.FIREWIRE_DOC_LIBRARY_MAX_FILE_BYTES || 250 * 1024 * 1024)
     }
 }).single('file')
 
@@ -198,6 +206,131 @@ export class FirewireData {
                 }
             }
         },
+        {
+            method: 'post',
+            path: '/api/firewire/storage/project-doc-library/:workspaceKey/files',
+            fx: async (req: express.Request, res: express.Response) => {
+                uploadDocLibraryFileToMemory(req, res, async(err) => {
+                    try {
+                        if (err instanceof multer.MulterError) {
+                            return res.status(400).json({ message: err.message })
+                        }
+                        if (err) {
+                            return res.status(500).json({ message: err.message || err })
+                        }
+
+                        const workspaceKey = String(req.params.workspaceKey || '').trim()
+                        if (!workspaceKey) {
+                            return res.status(400).json({ message: 'workspaceKey is required.' })
+                        }
+                        if (!req.file?.buffer?.length) {
+                            return res.status(400).json({ message: 'file is required.' })
+                        }
+
+                        const storage = new AzureBlobDocumentStorage()
+                        if (!storage.isConfigured()) {
+                            return res.status(500).json({
+                                message: 'Azure Blob Storage is not configured. Set FIREWIRE_DOC_LIBRARY_BLOB_CONNECTION_STRING.'
+                            })
+                        }
+
+                        const fileId = FirewireData.resolveUploadField(req.body?.fileId) || FirewireData.createClientSafeId('doc')
+                        const versionId = FirewireData.resolveUploadField(req.body?.versionId) || FirewireData.createClientSafeId('ver')
+                        const folderId = FirewireData.resolveUploadField(req.body?.folderId) || 'unfiled'
+                        const versionNumber = Number(FirewireData.resolveUploadField(req.body?.versionNumber) || 1)
+                        const uploadedAt = new Date().toISOString()
+                        const safeName = FirewireData.sanitizeBlobPathSegment(req.file.originalname || 'document')
+                        const blobName = [
+                            'project-doc-library',
+                            FirewireData.sanitizeBlobPathSegment(workspaceKey),
+                            FirewireData.sanitizeBlobPathSegment(fileId),
+                            `${String(versionNumber).padStart(4, '0')}-${FirewireData.sanitizeBlobPathSegment(versionId)}-${safeName}`
+                        ].join('/')
+
+                        await storage.upload({
+                            buffer: req.file.buffer,
+                            containerName: workspaceKey,
+                            blobName,
+                            contentType: req.file.mimetype || 'application/octet-stream',
+                            metadata: {
+                                workspaceKey,
+                                fileId,
+                                versionId,
+                                folderId
+                            }
+                        })
+
+                        return res.status(200).json({
+                            data: {
+                                id: versionId,
+                                versionNumber,
+                                uploadedAt,
+                                uploadedBy: 'Current User',
+                                sourceFileName: req.file.originalname,
+                                sizeBytes: req.file.size,
+                                mimeType: req.file.mimetype || 'application/octet-stream',
+                                lastModified: Number(FirewireData.resolveUploadField(req.body?.lastModified) || Date.now()),
+                                blobContainerName: storage.getProjectContainerName(workspaceKey),
+                                blobName
+                            }
+                        })
+                    } catch (uploadErr: Error|any) {
+                        return res.status(500).json({
+                            message: uploadErr && uploadErr.message ? uploadErr.message : uploadErr
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/firewire/storage/project-doc-library/:workspaceKey/files/:fileId/versions/:versionId/content',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const workspaceKey = String(req.params.workspaceKey || '').trim()
+                    const fileId = String(req.params.fileId || '').trim()
+                    const versionId = String(req.params.versionId || '').trim()
+                    if (!workspaceKey || !fileId || !versionId) {
+                        return res.status(400).json({ message: 'workspaceKey, fileId, and versionId are required.' })
+                    }
+
+                    const sqldb = new SqlDb(req.app)
+                    const workspace = await FirewireData.loadStoredWorkspace(sqldb, 'project-doc-library', workspaceKey, { files: [] })
+                    const file = Array.isArray(workspace.payload?.files)
+                        ? workspace.payload.files.find((item: any) => item?.id === fileId)
+                        : undefined
+                    const version = file?.versions?.find((item: any) => item?.id === versionId)
+                    if (!file || !version) {
+                        return res.status(404).json({ message: 'Document version was not found.' })
+                    }
+
+                    if (version.blobName) {
+                        const storage = new AzureBlobDocumentStorage()
+                        const result = await storage.download(workspaceKey, version.blobName)
+                        res.setHeader('Content-Type', result.contentType)
+                        res.setHeader('Content-Disposition', `inline; filename="${FirewireData.escapeHeaderFileName(version.sourceFileName || file.name || 'document')}"`)
+                        return res.status(200).send(result.buffer)
+                    }
+
+                    if (version.dataUrl) {
+                        const dataUrl = String(version.dataUrl)
+                        const commaIndex = dataUrl.indexOf(',')
+                        const header = commaIndex >= 0 ? dataUrl.slice(0, commaIndex) : ''
+                        const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl
+                        const mimeTypeMatch = header.match(/data:(.*?);base64/)
+                        res.setHeader('Content-Type', mimeTypeMatch ? mimeTypeMatch[1] : 'application/octet-stream')
+                        res.setHeader('Content-Disposition', `inline; filename="${FirewireData.escapeHeaderFileName(version.sourceFileName || file.name || 'document')}"`)
+                        return res.status(200).send(Buffer.from(base64, 'base64'))
+                    }
+
+                    return res.status(404).json({ message: 'Document version content was not found.' })
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
+            }
+        },
         // Get Devices
         {
             method: 'get',
@@ -323,7 +456,7 @@ export class FirewireData {
                             link: String(req.body?.device?.link || '').trim(),
                             cost: Number(req.body?.device?.cost ?? existing.cost ?? 0),
                             defaultLabor: Number(req.body?.device?.defaultLabor ?? existing.defaultLabor ?? 0),
-                            laborRate: Number(req.body?.device?.laborRate ?? existing.laborRate ?? 50),
+                            laborRate: Number(req.body?.device?.laborRate ?? existing.laborRate ?? 56),
                             slcAddress: String(req.body?.device?.slcAddress || '').trim(),
                             serialNumber: String(req.body?.device?.serialNumber || '').trim(),
                             strobeAddress: String(req.body?.device?.strobeAddress || '').trim(),
@@ -1494,7 +1627,7 @@ export class FirewireData {
 
                         let material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
                         let createdMaterial = false
-                        const categoryDefaultLabor = typeof category.defaultLabor === 'number' ? Number(category.defaultLabor) : 2
+                        const categoryDefaultLabor = typeof category.defaultLabor === 'number' ? Number(category.defaultLabor) : 112
                         const categorySlcAddress = String(category.slcAddress || '').trim()
                         const categorySpeakerAddress = String(category.speakerAddress || '').trim()
                         const categoryStrobeAddress = String(category.strobeAddress || '').trim()
@@ -1607,7 +1740,7 @@ export class FirewireData {
                                 partNumber,
                                 link: '',
                                 cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                                defaultLabor: Number(device.defaultLabor || 2),
+                                defaultLabor: Number(device.defaultLabor || 112),
                                 slcAddress: '',
                                 serialNumber: '',
                                 strobeAddress: '',
@@ -2579,5 +2712,32 @@ export class FirewireData {
                 updatedAt: record.updateat
             }
         }
+    }
+
+    private static resolveUploadField(value: unknown): string {
+        if (Array.isArray(value)) {
+            return String(value[0] || '').trim()
+        }
+        return String(value || '').trim()
+    }
+
+    private static createClientSafeId(prefix: string): string {
+        return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+    }
+
+    private static sanitizeBlobPathSegment(value: string): string {
+        const cleaned = String(value || '')
+            .trim()
+            .replace(/\\/g, '/')
+            .split('/')
+            .filter(Boolean)
+            .join('-')
+            .replace(/[^a-zA-Z0-9._-]/g, '-')
+            .replace(/-+/g, '-')
+        return cleaned || 'unnamed'
+    }
+
+    private static escapeHeaderFileName(value: string): string {
+        return String(value || 'document').replace(/["\r\n]/g, '_')
     }
 }

@@ -48,7 +48,7 @@ import { FormSectionRecordInputValueSchema } from './schemas/formsectionrecordin
 import { ProjectStatusSchema } from './schemas/projectstatus.schema';
 
 const apiKey = process.env.fieldwire
-const defaultMaterialLabor = 2
+const defaultMaterialLabor = 112
 
 export class FieldwireSDK {
     private _jwtToken: any = null

@@ -1,4 +1,5 @@
 import * as express from 'express'
+import * as mssql from 'mssql'
 import { Device } from './device';
 import { Category } from './category';
 import { Vendor } from './vendor';
@@ -196,22 +197,27 @@ export class SqlDb {
             try {
                 await this.ensureWorkspaceStorageSchema()
                 const sql = this.app.locals.sqlserver
-                const escapedArea = this._escapeSql(area)
-                const escapedKey = this._escapeSql(workspaceKey)
-                const escapedPayload = this._escapeSql(payloadJson)
-                const escapedUpdatedBy = this._escapeSql(updatedBy)
-                await sql.query(`
+                const pool = await sql.init()
+                const request = pool.request()
+                request.timeout = Math.max(Number(request.timeout || 0), 120000)
+                await request
+                    .input('workspaceStorageId', mssql.UniqueIdentifier, randomUUID())
+                    .input('area', mssql.NVarChar(100), area)
+                    .input('workspaceKey', mssql.NVarChar(200), workspaceKey)
+                    .input('payloadJson', mssql.NVarChar(mssql.MAX), payloadJson)
+                    .input('updatedBy', mssql.NVarChar(100), updatedBy)
+                    .query(`
                     MERGE dbo.workspaceStorage AS target
-                    USING (SELECT N'${escapedArea}' AS [area], N'${escapedKey}' AS [workspaceKey]) AS source
+                    USING (SELECT @area AS [area], @workspaceKey AS [workspaceKey]) AS source
                     ON target.[area] = source.[area] AND target.[workspaceKey] = source.[workspaceKey]
                     WHEN MATCHED THEN
                         UPDATE SET
-                            [payloadJson] = N'${escapedPayload}',
+                            [payloadJson] = @payloadJson,
                             [updateat] = GETDATE(),
-                            [updateby] = N'${escapedUpdatedBy}'
+                            [updateby] = @updatedBy
                     WHEN NOT MATCHED THEN
                         INSERT ([workspaceStorageId], [area], [workspaceKey], [payloadJson], [createby], [updateby])
-                        VALUES ('${randomUUID()}', N'${escapedArea}', N'${escapedKey}', N'${escapedPayload}', N'${escapedUpdatedBy}', N'${escapedUpdatedBy}');
+                        VALUES (@workspaceStorageId, @area, @workspaceKey, @payloadJson, @updatedBy, @updatedBy);
                 `)
                 return resolve(true)
             } catch (err) {
@@ -336,7 +342,7 @@ export class SqlDb {
                         [link]=N'${this._escapeSql(this._truncateSqlString(input.link || '', 1000))}',
                         [cost]=${Number(input.cost || 0)},
                         [defaultLabor]=${Number(input.defaultLabor || 0)},
-                        [laborRate]=${Number(input.laborRate || 50)},
+                        [laborRate]=${Number(input.laborRate || 56)},
                         [slcAddress]=N'${this._escapeSql(this._truncateSqlString(input.slcAddress || '', 100))}',
                         [serialNumber]=N'${this._escapeSql(this._truncateSqlString(input.serialNumber || '', 100))}',
                         [strobeAddress]=N'${this._escapeSql(this._truncateSqlString(input.strobeAddress || '', 100))}',
@@ -371,7 +377,7 @@ export class SqlDb {
                 )
                 VALUES(
                     ${this._toSqlValue(this._truncateSqlString(input.name, 500))}, ${this._toSqlValue(this._truncateSqlString(input.shortName || '', 200))}, '${this._escapeSql(input.vendorId)}', '${this._escapeSql(input.categoryId)}',
-                    ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)}, ${Number(input.laborRate || 50)},
+                    ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)}, ${Number(input.laborRate || 56)},
                     ${this._toSqlValue(this._truncateSqlString(input.slcAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.serialNumber || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.strobeAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.speakerAddress || '', 100))}
                 )`)
                 this.app.locals.devices = null
@@ -974,7 +980,7 @@ export class SqlDb {
             BEGIN
                 IF COL_LENGTH('dbo.devices', 'laborRate') IS NULL
                 BEGIN
-                    ALTER TABLE dbo.devices ADD [laborRate] DECIMAL(18, 2) NOT NULL CONSTRAINT [DF_devices_laborRate_runtime] DEFAULT ((50))
+                    ALTER TABLE dbo.devices ADD [laborRate] DECIMAL(18, 2) NOT NULL CONSTRAINT [DF_devices_laborRate_runtime] DEFAULT ((56))
                 END
 
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'name' AND max_length < 1000)

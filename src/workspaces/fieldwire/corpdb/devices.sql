@@ -40,5 +40,5 @@ GO
 ALTER TABLE [dbo].[devices] ADD  DEFAULT ('system') FOR [updateby]
 GO
 
-ALTER TABLE [dbo].[devices] ADD  DEFAULT ((50)) FOR [laborRate]
+ALTER TABLE [dbo].[devices] ADD  DEFAULT ((56)) FOR [laborRate]
 GO

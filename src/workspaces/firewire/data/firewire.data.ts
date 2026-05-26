@@ -323,6 +323,7 @@ export class FirewireData {
                             link: String(req.body?.device?.link || '').trim(),
                             cost: Number(req.body?.device?.cost ?? existing.cost ?? 0),
                             defaultLabor: Number(req.body?.device?.defaultLabor ?? existing.defaultLabor ?? 0),
+                            laborRate: Number(req.body?.device?.laborRate ?? existing.laborRate ?? 50),
                             slcAddress: String(req.body?.device?.slcAddress || '').trim(),
                             serialNumber: String(req.body?.device?.serialNumber || '').trim(),
                             strobeAddress: String(req.body?.device?.strobeAddress || '').trim(),

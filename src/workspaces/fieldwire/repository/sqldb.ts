@@ -33,9 +33,11 @@ export class SqlDb {
         return this._getMany<Device>('devices')
     }
     public async getDevice(deviceId: string): Promise<VwDevice|null> {
+        await this.ensureDeviceMaterialTextSchema()
         return this._getOne<VwDevice>('vwDevices', `deviceId='${deviceId}'`)
     }
     public async getVwDevices(): Promise<VwDevice[]> {
+        await this.ensureDeviceMaterialTextSchema()
         return this._getMany<VwDevice>('vwDevices')
     }
     public async getCategories(): Promise<Category[]> {
@@ -298,6 +300,7 @@ export class SqlDb {
     public async createMaterial(input: Material): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
             try {
+                await this.ensureDeviceMaterialTextSchema()
                 const sql = this.app.locals.sqlserver
                 const result = await sql.query(`INSERT INTO materials(
                     name, shortName, vendorId, categoryId,
@@ -305,9 +308,9 @@ export class SqlDb {
                     slcAddress, serialNumber, strobeAddress, speakerAddress
                 )
                 VALUES(
-                    '${input.name}','${input.shortName}','${input.vendorId}', '${input.categoryId}',
-                    '${input.partNumber}', '${input.link}', ${input.cost}, ${input.defaultLabor},
-                    '${input.slcAddress}', '${input.serialNumber}', '${input.strobeAddress}', '${input.speakerAddress}'
+                    ${this._toSqlValue(this._truncateSqlString(input.name, 500))}, ${this._toSqlValue(this._truncateSqlString(input.shortName || '', 200))}, '${this._escapeSql(input.vendorId)}', '${this._escapeSql(input.categoryId)}',
+                    ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)},
+                    ${this._toSqlValue(this._truncateSqlString(input.slcAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.serialNumber || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.strobeAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.speakerAddress || '', 100))}
                 )`)
                 this.app.locals.materials = null
                 this.app.locals.vwMaterials = null
@@ -322,20 +325,22 @@ export class SqlDb {
     public async updateDevice(input: Device): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
             try {
+                await this.ensureDeviceMaterialTextSchema()
                 const sql = this.app.locals.sqlserver
                 await sql.query(`UPDATE devices
-                    SET [name]=N'${this._escapeSql(input.name)}',
-                        [shortName]=N'${this._escapeSql(input.shortName || '')}',
+                    SET [name]=N'${this._escapeSql(this._truncateSqlString(input.name, 500))}',
+                        [shortName]=N'${this._escapeSql(this._truncateSqlString(input.shortName || '', 200))}',
                         [vendorId]='${this._escapeSql(input.vendorId)}',
                         [categoryId]='${this._escapeSql(input.categoryId)}',
-                        [partNumber]=N'${this._escapeSql(input.partNumber)}',
-                        [link]=N'${this._escapeSql(input.link || '')}',
+                        [partNumber]=N'${this._escapeSql(this._truncateSqlString(input.partNumber, 120))}',
+                        [link]=N'${this._escapeSql(this._truncateSqlString(input.link || '', 1000))}',
                         [cost]=${Number(input.cost || 0)},
                         [defaultLabor]=${Number(input.defaultLabor || 0)},
-                        [slcAddress]=N'${this._escapeSql(input.slcAddress || '')}',
-                        [serialNumber]=N'${this._escapeSql(input.serialNumber || '')}',
-                        [strobeAddress]=N'${this._escapeSql(input.strobeAddress || '')}',
-                        [speakerAddress]=N'${this._escapeSql(input.speakerAddress || '')}',
+                        [laborRate]=${Number(input.laborRate || 50)},
+                        [slcAddress]=N'${this._escapeSql(this._truncateSqlString(input.slcAddress || '', 100))}',
+                        [serialNumber]=N'${this._escapeSql(this._truncateSqlString(input.serialNumber || '', 100))}',
+                        [strobeAddress]=N'${this._escapeSql(this._truncateSqlString(input.strobeAddress || '', 100))}',
+                        [speakerAddress]=N'${this._escapeSql(this._truncateSqlString(input.speakerAddress || '', 100))}',
                         [updateat]=GETDATE(),
                         [updateby]='system'
                     WHERE [deviceId]='${this._escapeSql(input.deviceId)}'`)
@@ -357,16 +362,17 @@ export class SqlDb {
     public async createDevice(input: Device): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
             try {
+                await this.ensureDeviceMaterialTextSchema()
                 const sql = this.app.locals.sqlserver
                 const result = await sql.query(`INSERT INTO devices(
                     name, shortName, vendorId, categoryId,
-                    partNumber, link, cost, defaultLabor,
+                    partNumber, link, cost, defaultLabor, laborRate,
                     slcAddress, serialNumber, strobeAddress, speakerAddress
                 )
                 VALUES(
-                    '${input.name}','${input.shortName}','${input.vendorId}', '${input.categoryId}',
-                    '${input.partNumber}', '${input.link}', ${input.cost}, ${input.defaultLabor},
-                    '${input.slcAddress}', '${input.serialNumber}', '${input.strobeAddress}', '${input.speakerAddress}'
+                    ${this._toSqlValue(this._truncateSqlString(input.name, 500))}, ${this._toSqlValue(this._truncateSqlString(input.shortName || '', 200))}, '${this._escapeSql(input.vendorId)}', '${this._escapeSql(input.categoryId)}',
+                    ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)}, ${Number(input.laborRate || 50)},
+                    ${this._toSqlValue(this._truncateSqlString(input.slcAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.serialNumber || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.strobeAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.speakerAddress || '', 100))}
                 )`)
                 this.app.locals.devices = null
                 this.app.locals.vwDevices = null
@@ -511,7 +517,7 @@ export class SqlDb {
                     deviceId, materialId
                 )
                 VALUES(
-                    '${deviceId}', '${materialId}'
+                    '${this._escapeSql(deviceId)}', '${this._escapeSql(materialId)}'
                 )`)
                 this.app.locals.devicematerials = null
                 this.app.locals.vwDeviceMaterials = null
@@ -957,6 +963,81 @@ export class SqlDb {
             END
         `)
     }
+    public async ensureDeviceMaterialTextSchema(): Promise<void> {
+        if (this.app.locals.deviceMaterialTextSchemaEnsured) {
+            return
+        }
+
+        const sql = this.app.locals.sqlserver
+        await sql.query(`
+            IF OBJECT_ID('dbo.devices', 'U') IS NOT NULL
+            BEGIN
+                IF COL_LENGTH('dbo.devices', 'laborRate') IS NULL
+                BEGIN
+                    ALTER TABLE dbo.devices ADD [laborRate] DECIMAL(18, 2) NOT NULL CONSTRAINT [DF_devices_laborRate_runtime] DEFAULT ((50))
+                END
+
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'name' AND max_length < 1000)
+                    ALTER TABLE dbo.devices ALTER COLUMN [name] NVARCHAR(500) NOT NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'shortName' AND max_length < 400)
+                    ALTER TABLE dbo.devices ALTER COLUMN [shortName] NVARCHAR(200) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'partNumber' AND max_length < 240)
+                    ALTER TABLE dbo.devices ALTER COLUMN [partNumber] NVARCHAR(120) NOT NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'link' AND max_length < 2000)
+                    ALTER TABLE dbo.devices ALTER COLUMN [link] NVARCHAR(1000) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'slcAddress' AND max_length < 200)
+                    ALTER TABLE dbo.devices ALTER COLUMN [slcAddress] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'serialNumber' AND max_length < 200)
+                    ALTER TABLE dbo.devices ALTER COLUMN [serialNumber] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'strobeAddress' AND max_length < 200)
+                    ALTER TABLE dbo.devices ALTER COLUMN [strobeAddress] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'speakerAddress' AND max_length < 200)
+                    ALTER TABLE dbo.devices ALTER COLUMN [speakerAddress] NVARCHAR(100) NULL
+            END
+
+            IF OBJECT_ID('dbo.materials', 'U') IS NOT NULL
+            BEGIN
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'name' AND max_length < 1000)
+                    ALTER TABLE dbo.materials ALTER COLUMN [name] NVARCHAR(500) NOT NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'shortName' AND max_length < 400)
+                    ALTER TABLE dbo.materials ALTER COLUMN [shortName] NVARCHAR(200) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'partNumber' AND max_length < 240)
+                    ALTER TABLE dbo.materials ALTER COLUMN [partNumber] NVARCHAR(120) NOT NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'link' AND max_length < 2000)
+                    ALTER TABLE dbo.materials ALTER COLUMN [link] NVARCHAR(1000) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'slcAddress' AND max_length < 200)
+                    ALTER TABLE dbo.materials ALTER COLUMN [slcAddress] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'serialNumber' AND max_length < 200)
+                    ALTER TABLE dbo.materials ALTER COLUMN [serialNumber] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'strobeAddress' AND max_length < 200)
+                    ALTER TABLE dbo.materials ALTER COLUMN [strobeAddress] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'speakerAddress' AND max_length < 200)
+                    ALTER TABLE dbo.materials ALTER COLUMN [speakerAddress] NVARCHAR(100) NULL
+            END
+        `)
+        await sql.query(`
+            IF OBJECT_ID('dbo.vwDevices', 'V') IS NOT NULL
+                AND (
+                    COL_LENGTH('dbo.vwDevices', 'laborRate') IS NULL
+                    OR COL_LENGTH('dbo.vwDevices', 'attributeCount') IS NULL
+                    OR COL_LENGTH('dbo.vwDevices', 'subTaskCount') IS NULL
+                )
+            BEGIN
+                EXEC(N'ALTER VIEW [dbo].[vwDevices]
+                AS
+                SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryId, dbo.categories.name AS categoryName, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost,
+                    dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
+                    ISNULL(attributeCounts.attributeCount, 0) AS attributeCount,
+                    ISNULL(subTaskCounts.subTaskCount, 0) AS subTaskCount
+                FROM dbo.devices INNER JOIN
+                    dbo.categories ON dbo.devices.categoryId = dbo.categories.categoryId INNER JOIN
+                    dbo.vendors ON dbo.devices.vendorId = dbo.vendors.vendorId LEFT OUTER JOIN
+                    (SELECT materialId, COUNT(*) AS attributeCount FROM dbo.materialAttributes GROUP BY materialId) AS attributeCounts ON dbo.devices.deviceId = attributeCounts.materialId LEFT OUTER JOIN
+                    (SELECT materialId, COUNT(*) AS subTaskCount FROM dbo.materialSubTasks GROUP BY materialId) AS subTaskCounts ON dbo.devices.deviceId = subTaskCounts.materialId')
+            END
+        `)
+        this.app.locals.deviceMaterialTextSchemaEnsured = true
+    }
     public async ensureCategorySchema(): Promise<void> {
         const sql = this.app.locals.sqlserver
         await sql.query(`
@@ -1051,6 +1132,10 @@ export class SqlDb {
     }
     private _escapeSql(value: string): string {
         return String(value || '').replace(/'/g, "''")
+    }
+    private _truncateSqlString(value: unknown, maxLength: number): string {
+        const text = String(value || '')
+        return text.length > maxLength ? text.slice(0, maxLength) : text
     }
     private _toSqlValue(value: unknown, type: 'string' | 'number' | 'date' = 'string'): string {
         if (value === null || typeof value === 'undefined' || value === '') {

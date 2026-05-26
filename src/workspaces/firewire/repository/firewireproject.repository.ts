@@ -487,6 +487,38 @@ export class FirewireProjectRepository {
         return this.getFirewireProject(projectId)
     }
 
+    async deleteFirewireProject(projectId: string): Promise<boolean> {
+        await this.ensureTable()
+        if (!validateUuid(projectId)) {
+            return false
+        }
+
+        const existingProject = await this.getFirewireProject(projectId)
+        if (!existingProject) {
+            return false
+        }
+
+        const pool = await this.getPool()
+        await pool.request()
+            .input('projectId', mssql.UniqueIdentifier, projectId)
+            .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;')
+
+        await pool.request()
+            .input('workspaceKey', mssql.NVarChar(200), projectId)
+            .query([
+                "IF OBJECT_ID(N'dbo.workspaceStorage', N'U') IS NOT NULL",
+                'BEGIN',
+                "    DELETE FROM dbo.workspaceStorage WHERE [area] = N'project-doc-library' AND [workspaceKey] = @workspaceKey;",
+                'END;'
+            ].join('\n'))
+
+        const result = await pool.request()
+            .input('uuid', mssql.UniqueIdentifier, projectId)
+            .query('DELETE FROM dbo.firewireProjects WHERE uuid = @uuid;')
+
+        return !!result.rowsAffected && result.rowsAffected[0] > 0
+    }
+
     async updateFieldwireMapping(projectId: string, input: FirewireProjectFieldwireMapInput, userId: string): Promise<FirewireProjectRecord | null> {
         await this.ensureTable()
         if (!validateUuid(projectId)) {

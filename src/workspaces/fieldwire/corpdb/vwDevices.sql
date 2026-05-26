@@ -1,10 +1,13 @@
 CREATE VIEW [dbo].[vwDevices]
 AS
 SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryId, dbo.categories.name AS categoryName, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost, 
-                  dbo.devices.defaultLabor, dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby
+                  dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
+                  ISNULL(attributeCounts.attributeCount, 0) AS attributeCount, ISNULL(subTaskCounts.subTaskCount, 0) AS subTaskCount
 FROM     dbo.devices INNER JOIN
                   dbo.categories ON dbo.devices.categoryId = dbo.categories.categoryId INNER JOIN
-                  dbo.vendors ON dbo.devices.vendorId = dbo.vendors.vendorId
+                  dbo.vendors ON dbo.devices.vendorId = dbo.vendors.vendorId LEFT OUTER JOIN
+                  (SELECT materialId, COUNT(*) AS attributeCount FROM dbo.materialAttributes GROUP BY materialId) AS attributeCounts ON dbo.devices.deviceId = attributeCounts.materialId LEFT OUTER JOIN
+                  (SELECT materialId, COUNT(*) AS subTaskCount FROM dbo.materialSubTasks GROUP BY materialId) AS subTaskCounts ON dbo.devices.deviceId = subTaskCounts.materialId
 GO
 
 EXEC sys.sp_addextendedproperty @name=N'MS_DiagramPane1', @value=N'[0E232FF0-B466-11cf-A24F-00AA00A3EFFF, 1.00]
@@ -139,4 +142,3 @@ GO
 
 EXEC sys.sp_addextendedproperty @name=N'MS_DiagramPaneCount', @value=1 , @level0type=N'SCHEMA',@level0name=N'dbo', @level1type=N'VIEW',@level1name=N'vwDevices'
 GO
-

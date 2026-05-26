@@ -9,6 +9,7 @@ export interface VwDevice {
     partNumber: string
     cost: number
     defaultLabor: number
+    laborRate?: number
     slcAddress: string
     serialNumber: string
     strobeAddress: string

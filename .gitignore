@@ -1,3 +1,6 @@
 .env
 /node_modules
 /eddyResponse
+
+# System files
+.DS_Store

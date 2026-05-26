@@ -8,6 +8,7 @@ CREATE TABLE [dbo].[devices](
 	[link] [nvarchar](1024) NOT NULL,
 	[cost] [money] NOT NULL,
 	[defaultLabor] [decimal](18, 0) NOT NULL,
+	[laborRate] [decimal](18, 2) NOT NULL,
 	[slcAddress] [nvarchar](50) NULL,
 	[serialNumber] [nvarchar](50) NULL,
 	[strobeAddress] [nvarchar](50) NULL,
@@ -39,3 +40,5 @@ GO
 ALTER TABLE [dbo].[devices] ADD  DEFAULT ('system') FOR [updateby]
 GO
 
+ALTER TABLE [dbo].[devices] ADD  DEFAULT ((50)) FOR [laborRate]
+GO

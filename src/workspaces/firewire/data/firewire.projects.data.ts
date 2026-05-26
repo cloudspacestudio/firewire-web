@@ -272,6 +272,40 @@ export class FirewireProjectsData {
             }
         },
         {
+            method: 'delete',
+            path: '/api/firewire/projects/firewire/:projectId',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = String(req.params.projectId || '').trim()
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid payload: missing projectId parameter.'
+                            })
+                        }
+
+                        const repository = new FirewireProjectRepository(req.app)
+                        const deleted = await repository.deleteFirewireProject(projectId)
+                        if (!deleted) {
+                            return res.status(404).json({
+                                message: 'Project not found.'
+                            })
+                        }
+
+                        return res.status(200).json({
+                            data: {
+                                deleted: true
+                            }
+                        })
+                    } catch (err: Error | any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
             method: 'patch',
             path: '/api/firewire/projects/firewire/:projectId/fieldwire',
             fx: (req: express.Request, res: express.Response) => {

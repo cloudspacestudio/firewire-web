@@ -46,6 +46,7 @@ import { DataTypeValueSchema } from './schemas/datatype.value.schema';
 import { TaskRelatedSchema } from './schemas/taskrelated.schema';
 import { FormSectionRecordInputValueSchema } from './schemas/formsectionrecordinputvalue.schema';
 import { ProjectStatusSchema } from './schemas/projectstatus.schema';
+import { AwsPostTokenSchema } from './schemas/awsposttoken.schema';
 
 const apiKey = process.env.fieldwire
 const defaultMaterialLabor = 112
@@ -117,7 +118,8 @@ export class FieldwireSDK {
                 })
 
                 if (response.status >= 300) {
-                    return reject(new Error(`${response.status}: ${response.statusText}`))
+                    const errorText = await response.text().catch(() => '')
+                    return reject(new Error(`${response.status}: ${response.statusText}${errorText ? ` - ${errorText}` : ''}`))
                 }
 
                 const result = await response.json()
@@ -156,6 +158,46 @@ export class FieldwireSDK {
                         const result = await response.json()
                         return resolve(result)
                     } catch (parseErr) {
+                        const justParseText = response.bodyUsed ? 'OK': await response.text()
+                        return resolve(justParseText)
+                    }
+                }
+                const resultText = await response.text()
+                return resolve(resultText)
+            } catch (err) {
+                return reject(err)
+            }
+        });
+    }
+    private async patch(path: string, body: any, additionalHeaders?: any): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (!this._jwtToken) {
+                    await this._getJwtToken()
+                }
+                if (!body) {
+                    body = {}
+                }
+                const url = `${this._regionUrl}${path}`
+                const headers = this._buildHeaders(additionalHeaders)
+                console.log(`PATCH: ${url}`)
+                console.log(`BODY: ${JSON.stringify(body, null, 1)}`)
+                const response = await fetch(url, {
+                    method: 'PATCH',
+                    body: JSON.stringify(body),
+                    headers: headers
+                })
+
+                if (response.status >= 300) {
+                    const errorText = await response.text().catch(() => '')
+                    return reject(new Error(`${response.status}: ${response.statusText}${errorText ? ` - ${errorText}` : ''}`))
+                }
+                const contentType = response.headers.get('Content-Type') || ''
+                if (contentType.includes('application/json')) {
+                    try {
+                        const result = await response.json()
+                        return resolve(result)
+                    } catch {
                         const justParseText = response.bodyUsed ? 'OK': await response.text()
                         return resolve(justParseText)
                     }
@@ -246,6 +288,30 @@ export class FieldwireSDK {
     public async editableProjects(): Promise<string[]> {
         return new Promise(async(resolve, reject) => {
             return resolve(FieldwireSDK.editableProjects)
+        })
+    }
+    public allowEditableProject(projectId: string): void {
+        const normalizedProjectId = String(projectId || '').trim()
+        if (normalizedProjectId && FieldwireSDK.editableProjects.indexOf(normalizedProjectId) < 0) {
+            FieldwireSDK.editableProjects.push(normalizedProjectId)
+        }
+    }
+    public async createProject(input: any): Promise<AccountProjectSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const project = input?.project ? input.project : input
+                const result = await this.post(`projects`, {
+                    project: {
+                        name: project?.name,
+                        code: project?.code,
+                        address: project?.address,
+                        time_zone: project?.time_zone || 'America/Chicago'
+                    }
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
         })
     }
     public async projectFloorplans(projectId: string, includeCurrentSheet: boolean): Promise<ProjectFloorplanSchema[]> {
@@ -355,6 +421,45 @@ export class FieldwireSDK {
                 return reject(err)
             }
         });
+    }
+    public async createSheetUpload(projectId: string, input: any): Promise<any> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const result = await this.post(`projects/${projectId}/sheet_uploads`, input, {})
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        })
+    }
+    public async projectSheetUploads(projectId: string): Promise<any[]> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await this.get(`projects/${projectId}/sheet_uploads`, {
+                    "Fieldwire-Filter": "active",
+                    "Fieldwire-Per-Page": 1000
+                })
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        })
+    }
+    public async updateFloorplan(projectId: string, floorplanId: string, input: any): Promise<ProjectFloorplanSchema> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                    throw new Error(`Attempted to edit a non-editable project: ${projectId}`)
+                }
+                const result = await this.patch(`projects/${projectId}/floorplans/${floorplanId}`, input, {})
+                return resolve(result)
+            } catch (err) {
+                return reject(err)
+            }
+        })
     }
     public async tasks(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
@@ -1361,7 +1466,7 @@ export class FieldwireSDK {
 
     // #region AWS
     // aws_post_tokens
-    public async aws_post_tokens(): Promise<any[]> {
+    public async aws_post_tokens(): Promise<AwsPostTokenSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
                 const result = await this.post(`aws_post_tokens`, {})

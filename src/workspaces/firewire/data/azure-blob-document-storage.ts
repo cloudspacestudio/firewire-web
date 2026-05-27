@@ -43,6 +43,13 @@ export class AzureBlobDocumentStorage {
         }
     }
 
+    async deleteIfExists(containerName: string, blobName: string): Promise<boolean> {
+        const container = await this.getContainer(containerName)
+        const blockBlob = container.getBlockBlobClient(blobName)
+        const response = await blockBlob.deleteIfExists()
+        return !!response.succeeded
+    }
+
     getProjectContainerName(projectKey: string): string {
         const normalized = String(projectKey || '')
             .trim()

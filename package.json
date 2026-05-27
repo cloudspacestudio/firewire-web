@@ -7,14 +7,16 @@
     "start": "ts-node --project tsconfig.json ./src/index.ts",
     "dev": "nodemon ./src/index.ts",
     "eddy": "ts-node --project tsconfig.json ./src/eddyimport.ts",
+    "security-pricing": "ts-node --project tsconfig.json ./src/security-pricing-import.ts",
     "db:migrate:sqlserver": "ts-node --project tsconfig.json ./src/sqlserver.migrate.ts"
   },
   "author": "Steven Sederburg (stevens@cloudspacestudio.com)",
   "license": "ISC",
   "dependencies": {
+    "@azure/storage-blob": "^12.27.0",
+    "@types/xlsx": "^0.0.35",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "@azure/storage-blob": "^12.27.0",
     "bcryptjs": "^2.4.3",
     "csv-parse": "^5.6.0",
     "dotenv": "^16.4.5",
@@ -28,7 +30,8 @@
     "pg": "^8.13.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2",
-    "uuid": "^11.0.3"
+    "uuid": "^11.0.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

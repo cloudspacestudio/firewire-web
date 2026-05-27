@@ -803,7 +803,7 @@ export class FirewireProjectRepository {
             fieldwireId: this.normalizeFieldwireId(input?.fieldwireId),
             worksheetData: this.normalizeWorksheetData(input?.worksheetData),
             name: this.requireString(input?.name, 'name', 200),
-            projectNbr: this.normalizeProjectNbrInput(input?.projectNbr, normalizedProjectStatus),
+            projectNbr: this.normalizeProjectNbrInput(input?.projectNbr),
             address: this.optionalString(input?.address, 500),
             bidDueDate: this.normalizeDate(input?.bidDueDate),
             projectStatus: normalizedProjectStatus,
@@ -817,13 +817,8 @@ export class FirewireProjectRepository {
         }
     }
 
-    private normalizeProjectNbrInput(input?: string | null, projectStatus?: string | null): string {
-        const value = this.optionalString(input, 100)
-        const normalizedStatus = this.optionalString(projectStatus, 100)
-        if (normalizedStatus === 'Install' && !value) {
-            throw new Error('projectNbr is required when projectStatus is Install.')
-        }
-        return value
+    private normalizeProjectNbrInput(input?: string | null): string {
+        return this.optionalString(input, 100)
     }
 
     private async resolveProjectGeocode(address: string, existingProject?: FirewireProjectRecord | null): Promise<ProjectGeocodeResult> {

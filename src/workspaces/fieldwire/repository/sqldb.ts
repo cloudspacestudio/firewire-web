@@ -16,6 +16,7 @@ import { VwDevice } from './vwdevice';
 import { VwMaterial } from './vwmaterial';
 import { VwDeviceMaterial } from './vwdevicematerial';
 import { VwEddyPricelist } from './vwEddyPricelist';
+import { VendorPricelist } from './vendorPricelist';
 import { CategoryLaborSchema } from '../schemas/categorylabor.schema';
 import { VendorImportSnapshot } from './vendorImportSnapshot';
 import { VendorImportRun } from './vendorImportRun';
@@ -52,6 +53,35 @@ export class SqlDb {
     public async getVendorById(vendorId: string): Promise<Vendor|null> {
         await this.ensureVendorImportSchema()
         return this._getOne<Vendor>('vendors', `[vendorId]='${this._escapeSql(vendorId)}'`)
+    }
+    public async getVendorByName(name: string): Promise<Vendor|null> {
+        await this.ensureVendorImportSchema()
+        return this._getOne<Vendor>('vendors', `[name]=N'${this._escapeSql(name)}'`)
+    }
+    public async createVendor(input: Partial<Vendor>): Promise<string> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                await this.ensureVendorImportSchema()
+                const sql = this.app.locals.sqlserver
+                const pool = await sql.init()
+                const vendorId = input.vendorId || randomUUID()
+                await pool.request()
+                    .input('vendorId', mssql.NVarChar(40), vendorId)
+                    .input('name', mssql.NVarChar(100), String(input.name || '').trim())
+                    .input('desc', mssql.NVarChar(500), String(input.desc || '').trim())
+                    .input('link', mssql.NVarChar(500), String(input.link || '').trim())
+                    .input('importConfigJson', mssql.NVarChar(mssql.MAX), typeof input.importConfigJson === 'string' ? input.importConfigJson : null)
+                    .query(`
+                        INSERT INTO dbo.vendors([vendorId], [name], [desc], [link], [importConfigJson], [createby], [updateby])
+                        VALUES(@vendorId, @name, @desc, @link, @importConfigJson, 'system', 'system')
+                    `)
+                this.app.locals.vendors = null
+                return resolve(vendorId)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        })
     }
     public async updateVendor(input: Vendor): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
@@ -184,6 +214,18 @@ export class SqlDb {
     }
     public async getVwEddyPricelistByPartNumber(partNumber: string): Promise<VwEddyPricelist[]> {
         return this._getMany<VwEddyPricelist>('VwEddyPricelist', `PartNumber='${partNumber}' AND ProductStatus IS NULL`)
+    }
+    public async getVendorPricelist(vendorId: string): Promise<VwEddyPricelist[]> {
+        await this.ensureVendorPricelistSchema()
+        return this._getMany<VwEddyPricelist>('VwVendorPricelist', `[vendorId]='${this._escapeSql(vendorId)}' AND ProductStatus IS NULL`, '[PartNumber] ASC')
+    }
+    public async getVendorPricelistByPartNumber(vendorId: string, partNumber: string): Promise<VwEddyPricelist[]> {
+        await this.ensureVendorPricelistSchema()
+        return this._getMany<VwEddyPricelist>('VwVendorPricelist', `[vendorId]='${this._escapeSql(vendorId)}' AND [PartNumber]=N'${this._escapeSql(partNumber)}' AND ProductStatus IS NULL`)
+    }
+    public async getRawVendorPricelist(vendorId: string): Promise<VendorPricelist[]> {
+        await this.ensureVendorPricelistSchema()
+        return this._getMany<VendorPricelist>('VendorPricelist', `[vendorId]='${this._escapeSql(vendorId)}'`, '[PartNumber] ASC')
     }
     public async getWorkspaceStorage(area: string, workspaceKey: string): Promise<WorkspaceStorageRecord|null> {
         await this.ensureWorkspaceStorageSchema()
@@ -867,8 +909,162 @@ export class SqlDb {
             }
         })
     }
+    public async replaceVendorPricelist(vendorId: string, rows: VendorPricelist[]): Promise<boolean> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                await this.ensureVendorPricelistSchema()
+                const sql = this.app.locals.sqlserver
+                const batches: string[] = []
+                const chunkSize = 150
+                for (let i = 0; i < rows.length; i += chunkSize) {
+                    const batch = rows.slice(i, i + chunkSize)
+                    if (batch.length <= 0) {
+                        continue
+                    }
+                    const values = batch.map((row) => `(
+                        ${this._toSqlValue(vendorId)},
+                        ${this._toSqlValue(row.sourceVendorName)},
+                        ${this._toSqlValue(row.brand)},
+                        ${this._toSqlValue(row.ParentCategory)},
+                        ${this._toSqlValue(row.Category)},
+                        ${this._toSqlValue(row.PartNumber)},
+                        ${this._toSqlValue(row.LongDescription)},
+                        ${this._toSqlValue(row.ServiceDescription)},
+                        ${this._toSqlValue(row.ManufacturerOrReseller)},
+                        ${this._toSqlValue(row.MSRPPrice, 'number')},
+                        ${this._toSqlValue(row.DiscountPercent, 'number')},
+                        ${this._toSqlValue(row.DirAdminFee, 'number')},
+                        ${this._toSqlValue(row.SalesPrice, 'number')},
+                        ${this._toSqlValue(row.FuturePrice, 'number')},
+                        ${this._toSqlValue(row.FutureEffectiveDate, 'date')},
+                        ${this._toSqlValue(row.FutureSalesPrice, 'number')},
+                        ${this._toSqlValue(row.FutureSalesEffectiveDate, 'date')},
+                        ${this._toSqlValue(row.MinOrderQuantity, 'number')},
+                        ${this._toSqlValue(row.ProductStatus)},
+                        ${this._toSqlValue(row.Agency)},
+                        ${this._toSqlValue(row.CountryOfOrigin)},
+                        ${this._toSqlValue(row.UPC)},
+                        ${this._toSqlValue(row.RawJson)}
+                    )`).join(',\n')
+                    batches.push(`INSERT INTO dbo.VendorPricelist(
+                        vendorId, sourceVendorName, brand, ParentCategory, Category, PartNumber,
+                        LongDescription, ServiceDescription, ManufacturerOrReseller,
+                        MSRPPrice, DiscountPercent, DirAdminFee, SalesPrice,
+                        FuturePrice, FutureEffectiveDate, FutureSalesPrice, FutureSalesEffectiveDate,
+                        MinOrderQuantity, ProductStatus, Agency, CountryOfOrigin, UPC, RawJson
+                    ) VALUES ${values}`)
+                }
+
+                const statements = [
+                    'BEGIN TRANSACTION',
+                    `DELETE FROM dbo.VendorPricelist WHERE vendorId=N'${this._escapeSql(vendorId)}'`,
+                    ...batches,
+                    'COMMIT TRANSACTION'
+                ].join(';\n')
+
+                await sql.query(statements)
+                this.app.locals.VendorPricelist = null
+                this.app.locals.VwVendorPricelist = null
+                return resolve(true)
+            } catch (err) {
+                try {
+                    const sql = this.app.locals.sqlserver
+                    await sql.query(`IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION`)
+                } catch {}
+                console.error(err)
+                return reject(err)
+            }
+        })
+    }
     public async getDeviceResolutionStrategies(): Promise<DeviceResolutionStrategy[]> {
         return this._getMany<DeviceResolutionStrategy>('deviceResolutionStrategies')
+    }
+
+    public async ensureVendorPricelistSchema(): Promise<void> {
+        const sql = this.app.locals.sqlserver
+        await this.ensureVendorImportSchema()
+        await sql.query(`
+            IF OBJECT_ID('dbo.VendorPricelist', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.VendorPricelist(
+                    [vendorPartId] NVARCHAR(40) NOT NULL CONSTRAINT [DF_VendorPricelist_vendorPartId_runtime] DEFAULT (CONVERT(NVARCHAR(40), NEWID())) PRIMARY KEY,
+                    [vendorId] NVARCHAR(40) NOT NULL,
+                    [sourceVendorName] NVARCHAR(200) NULL,
+                    [brand] NVARCHAR(200) NULL,
+                    [ParentCategory] NVARCHAR(500) NULL,
+                    [Category] NVARCHAR(500) NULL,
+                    [PartNumber] NVARCHAR(120) NOT NULL,
+                    [LongDescription] NVARCHAR(1000) NULL,
+                    [ServiceDescription] NVARCHAR(1000) NULL,
+                    [ManufacturerOrReseller] NVARCHAR(500) NULL,
+                    [MSRPPrice] MONEY NULL,
+                    [DiscountPercent] DECIMAL(9, 4) NULL,
+                    [DirAdminFee] MONEY NULL,
+                    [SalesPrice] MONEY NULL,
+                    [FuturePrice] MONEY NULL,
+                    [FutureEffectiveDate] DATE NULL,
+                    [FutureSalesPrice] MONEY NULL,
+                    [FutureSalesEffectiveDate] DATE NULL,
+                    [MinOrderQuantity] INT NULL,
+                    [ProductStatus] NVARCHAR(500) NULL,
+                    [Agency] NVARCHAR(50) NULL,
+                    [CountryOfOrigin] NVARCHAR(50) NULL,
+                    [UPC] NVARCHAR(50) NULL,
+                    [RawJson] NVARCHAR(MAX) NULL,
+                    [createat] DATETIME NOT NULL CONSTRAINT [DF_VendorPricelist_createat_runtime] DEFAULT (GETDATE()),
+                    [createby] NVARCHAR(40) NOT NULL CONSTRAINT [DF_VendorPricelist_createby_runtime] DEFAULT ('system'),
+                    [updateat] DATETIME NOT NULL CONSTRAINT [DF_VendorPricelist_updateat_runtime] DEFAULT (GETDATE()),
+                    [updateby] NVARCHAR(40) NOT NULL CONSTRAINT [DF_VendorPricelist_updateby_runtime] DEFAULT ('system')
+                )
+            END
+
+            IF COL_LENGTH('dbo.VendorPricelist', 'ServiceDescription') IS NULL
+                ALTER TABLE dbo.VendorPricelist ADD [ServiceDescription] NVARCHAR(1000) NULL
+            IF COL_LENGTH('dbo.VendorPricelist', 'ManufacturerOrReseller') IS NULL
+                ALTER TABLE dbo.VendorPricelist ADD [ManufacturerOrReseller] NVARCHAR(500) NULL
+
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.indexes
+                WHERE [name] = 'IX_VendorPricelist_vendor_part'
+                    AND [object_id] = OBJECT_ID('dbo.VendorPricelist')
+            )
+            BEGIN
+                CREATE NONCLUSTERED INDEX [IX_VendorPricelist_vendor_part]
+                    ON dbo.VendorPricelist([vendorId] ASC, [PartNumber] ASC)
+            END
+
+            IF OBJECT_ID('dbo.VwVendorPricelist', 'V') IS NULL
+            BEGIN
+                EXEC(N'CREATE VIEW dbo.VwVendorPricelist AS SELECT
+                    vp.vendorId,
+                    v.name AS vendorName,
+                    vp.ParentCategory,
+                    vp.Category,
+                    vp.PartNumber,
+                    vp.LongDescription,
+                    vp.MSRPPrice,
+                    vp.SalesPrice,
+                    vp.FuturePrice,
+                    vp.FutureEffectiveDate,
+                    vp.FutureSalesPrice,
+                    vp.FutureSalesEffectiveDate,
+                    vp.MinOrderQuantity,
+                    vp.ProductStatus,
+                    vp.Agency,
+                    vp.CountryOfOrigin,
+                    vp.UPC,
+                    vp.vendorPartId AS ProductID,
+                    CAST(NULL AS NVARCHAR(MAX)) AS PrimaryImage,
+                    CAST(NULL AS INT) AS QuantityAvailable,
+                    vp.brand,
+                    vp.ServiceDescription,
+                    vp.ManufacturerOrReseller,
+                    vp.DiscountPercent,
+                    vp.DirAdminFee
+                FROM dbo.VendorPricelist vp
+                INNER JOIN dbo.vendors v ON vp.vendorId = v.vendorId')
+            END
+        `)
     }
 
     public async ensureVendorImportSchema(): Promise<void> {

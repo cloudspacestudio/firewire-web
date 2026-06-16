@@ -3,9 +3,10 @@ export interface Material {
     name: string
     shortName?: string
     vendorId: string
-    categoryId: string
+    categoryName?: string
     partNumber: string
     link: string
+    msrp?: number
     cost: number
     defaultLabor: number
     slcAddress: string

@@ -44,6 +44,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FirewireUserPreferencesRepository = void 0;
 const mssql = __importStar(require("mssql"));
+const crypto_1 = require("crypto");
 class FirewireUserPreferencesRepository {
     constructor(app) {
         this.app = app;
@@ -84,7 +85,8 @@ class FirewireUserPreferencesRepository {
     saveUserPreferences(userId, payload, actorUserId) {
         return __awaiter(this, void 0, void 0, function* () {
             yield this.ensureTable();
-            const normalized = this.normalizePayload(payload);
+            const existingRecord = yield this.getUserPreferences(userId);
+            const normalized = this.normalizePayload(payload, existingRecord.preferences);
             const pool = yield this.getPool();
             const query = [
                 'MERGE dbo.firewireUserPreferences AS target',
@@ -108,6 +110,35 @@ class FirewireUserPreferencesRepository {
             return this.getUserPreferences(userId);
         });
     }
+    verifyWorkspacePin(userId, pin) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const record = yield this.getUserPreferences(userId);
+            const currentHash = record.preferences.workspaceLock.pinHash || null;
+            if (!currentHash) {
+                return false;
+            }
+            return currentHash === this.hashWorkspacePin(userId, pin);
+        });
+    }
+    saveWorkspacePin(userId, newPin, actorUserId, currentPin) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.ensureTable();
+            const record = yield this.getUserPreferences(userId);
+            const currentHash = record.preferences.workspaceLock.pinHash || null;
+            const normalizedNewPin = this.normalizeWorkspacePin(newPin);
+            if (currentHash) {
+                const normalizedCurrentPin = this.normalizeWorkspacePin(currentPin, true);
+                if (!normalizedCurrentPin || currentHash !== this.hashWorkspacePin(userId, normalizedCurrentPin)) {
+                    throw new Error('Current PIN is incorrect.');
+                }
+            }
+            const updatedPreferences = this.normalizePayload(Object.assign(Object.assign({}, record.preferences), { workspaceLock: {
+                    hasPin: true,
+                    pinHash: this.hashWorkspacePin(userId, normalizedNewPin)
+                } }), record.preferences);
+            return this.saveUserPreferences(userId, updatedPreferences, actorUserId);
+        });
+    }
     ensureTable() {
         return __awaiter(this, void 0, void 0, function* () {
             const pool = yield this.getPool();
@@ -127,10 +158,16 @@ class FirewireUserPreferencesRepository {
             yield pool.request().batch(query);
         });
     }
-    normalizePayload(payload) {
+    normalizePayload(payload, existing) {
+        var _a;
         const defaults = this.defaultPreferences();
         const homePage = (payload === null || payload === void 0 ? void 0 : payload.homePage) && typeof payload.homePage === 'object' ? payload.homePage : defaults.homePage;
+        const projectMap = (payload === null || payload === void 0 ? void 0 : payload.projectMap) && typeof payload.projectMap === 'object' ? payload.projectMap : defaults.projectMap;
         const profile = (payload === null || payload === void 0 ? void 0 : payload.profile) && typeof payload.profile === 'object' ? payload.profile : defaults.profile;
+        const workspaceLock = (payload === null || payload === void 0 ? void 0 : payload.workspaceLock) && typeof payload.workspaceLock === 'object' ? payload.workspaceLock : (existing === null || existing === void 0 ? void 0 : existing.workspaceLock) || defaults.workspaceLock;
+        const existingPinHash = typeof ((_a = existing === null || existing === void 0 ? void 0 : existing.workspaceLock) === null || _a === void 0 ? void 0 : _a.pinHash) === 'string' ? existing.workspaceLock.pinHash : null;
+        const requestedPinHash = typeof workspaceLock.pinHash === 'string' && workspaceLock.pinHash.trim() ? workspaceLock.pinHash.trim() : null;
+        const pinHash = requestedPinHash || existingPinHash;
         return {
             homePage: {
                 backgroundMode: this.normalizeBackgroundMode(homePage.backgroundMode),
@@ -142,8 +179,20 @@ class FirewireUserPreferencesRepository {
                 gradientTo: this.normalizeHexColor(homePage.gradientTo, '#060a12'),
                 gradientAngle: this.normalizeAngle(homePage.gradientAngle)
             },
+            projectMap: {
+                version: this.normalizeProjectMapVersion(projectMap.version),
+                style: this.normalizeProjectMapStyle(projectMap.style),
+                dimension: this.normalizeProjectMapDimension(projectMap.dimension),
+                showRoadDetails: projectMap.showRoadDetails !== false,
+                showBuildingFootprints: projectMap.showBuildingFootprints !== false,
+                autoFitPins: projectMap.autoFitPins !== false
+            },
             profile: {
                 avatarDataUrl: this.normalizeAvatarDataUrl(profile.avatarDataUrl)
+            },
+            workspaceLock: {
+                hasPin: !!pinHash,
+                pinHash
             }
         };
     }
@@ -193,6 +242,24 @@ class FirewireUserPreferencesRepository {
         }
         return Math.max(0, Math.min(360, Math.round(value)));
     }
+    normalizeProjectMapVersion(input) {
+        const value = Number(input);
+        return Number.isFinite(value) && value >= 1 ? Math.round(value) : 1;
+    }
+    normalizeProjectMapStyle(input) {
+        switch (input) {
+            case 'road':
+            case 'satellite':
+            case 'road_shaded_relief':
+            case 'night':
+                return String(input);
+            default:
+                return 'night';
+        }
+    }
+    normalizeProjectMapDimension(input) {
+        return input === '3d' ? '3d' : '2d';
+    }
     normalizeAvatarDataUrl(input) {
         if (typeof input !== 'string') {
             return null;
@@ -208,6 +275,27 @@ class FirewireUserPreferencesRepository {
             throw new Error('Avatar image is too large.');
         }
         return value;
+    }
+    normalizeWorkspacePin(input, allowBlank = false) {
+        if (typeof input !== 'string') {
+            if (allowBlank) {
+                return '';
+            }
+            throw new Error('PIN must be provided.');
+        }
+        const value = input.trim();
+        if (!value && allowBlank) {
+            return '';
+        }
+        if (!/^\d{4,8}$/.test(value)) {
+            throw new Error('PIN must be 4 to 8 numeric digits.');
+        }
+        return value;
+    }
+    hashWorkspacePin(userId, pin) {
+        return (0, crypto_1.createHash)('sha256')
+            .update(`${userId.trim().toLowerCase()}::${pin}`)
+            .digest('hex');
     }
     parsePreferences(input) {
         if (!input) {
@@ -232,8 +320,20 @@ class FirewireUserPreferencesRepository {
                 gradientTo: '#060a12',
                 gradientAngle: 135
             },
+            projectMap: {
+                version: 1,
+                style: 'night',
+                dimension: '2d',
+                showRoadDetails: true,
+                showBuildingFootprints: true,
+                autoFitPins: true
+            },
             profile: {
                 avatarDataUrl: null
+            },
+            workspaceLock: {
+                hasPin: false,
+                pinHash: null
             }
         };
     }

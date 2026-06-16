@@ -3,7 +3,6 @@ import { ResolverParams } from "./resolver.params";
 import { ResolvedDevice } from "../../schemas/resolvedDevice";
 import { FieldwireSDK } from "../../fieldwire";
 import { Device } from '../../repository/device';
-import { Category } from '../../repository/category';
 import { Vendor } from '../../repository/vendor';
 import { SqlDb } from '../../repository/sqldb';
 import { Material } from '../../repository/material';
@@ -19,7 +18,6 @@ import { DeviceStrategies, FormulaStrategy } from '../strategies/device.strategi
 export class DeviceResolver {
 
     public devicesFromDb: Device[] = []
-    public categoriesFromDb: Category[] = []
     public vendorsFromDb: Vendor[] = []
     public materialsFromDb: Material[] = []
     public deviceMaterialsFromDb: DeviceMaterial[] = []
@@ -44,10 +42,6 @@ export class DeviceResolver {
                 // Load Devices
                 if (!this.devicesFromDb || this.devicesFromDb.length <= 0) {
                     this.devicesFromDb = await this.sqldb.getDevices()
-                }
-                // Load Category
-                if (!this.categoriesFromDb || this.categoriesFromDb.length <= 0) {
-                    this.categoriesFromDb = await this.sqldb.getCategories()
                 }
                 // Load Vendor
                 if (!this.vendorsFromDb || this.vendorsFromDb.length <= 0) {
@@ -115,10 +109,15 @@ export class DeviceResolver {
                     return resolve(test)
                 }
 
-                const category = this.categoriesFromDb.find(s => s.categoryId===selectedDevice.categoryId)
+                const categoryName = String(selectedDevice.categoryName || '').trim()
+                const category = {
+                    name: categoryName,
+                    shortName: categoryName,
+                    handle: this.buildFieldwireHandle(categoryName)
+                }
                 const vendor = this.vendorsFromDb.find(s => s.vendorId===selectedDevice.vendorId)
-                if (!category) {
-                    console.log(`Unable to locate corresponding related category for device "${selectedDevice.name}" using categoryId of "${selectedDevice.categoryId}"`)
+                if (!categoryName) {
+                    console.log(`Unable to resolve category text for device "${selectedDevice.name}"`)
                     return resolve(null)
                 }
                 if (!vendor) {
@@ -309,6 +308,15 @@ export class DeviceResolver {
                 return reject(err)
             }
         })
+    }
+
+    private buildFieldwireHandle(value: string): string {
+        const handle = String(value || '')
+            .trim()
+            .toUpperCase()
+            .replace(/[^A-Z0-9]+/g, '')
+            .slice(0, 10)
+        return handle || 'DEVICE'
     }
 
 }

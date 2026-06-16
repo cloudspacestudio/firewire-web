@@ -14,7 +14,6 @@ import { Utils } from '../../core/utils'
 import { ImportItem } from './schemas/importitem.schemas'
 import { Device } from './repository/device';
 import { Material } from './repository/material';
-import { Category } from './repository/category';
 import { Vendor } from './repository/vendor';
 import { DeviceMaterial } from './repository/devicematerial';
 import { SqlDb } from './repository/sqldb';
@@ -1030,31 +1029,22 @@ export class FieldwireSDK {
             try {
                 const sqldb: SqlDb = new SqlDb(app)
                 const testDevices: TestDevice[] = await sqldb.getTestDevices()
-                const categories = await sqldb.getCategories()
                 const devices = await sqldb.getDevices()
                 const vendors = await sqldb.getVendors()
                 const materials = await sqldb.getMaterials()
                 const deviceMaterials = await sqldb.getDeviceMaterials()
-                const eddyProducts = await sqldb.getEddyProducts()
-                const eddyPricelist = await sqldb.getEddyPricelist()
+                const parts = await sqldb.getParts()
                 if (!testDevices || testDevices.length <= 0) {
                     return resolve(false)
                 }
                 for (let i = 0; i < testDevices.length; i++) {
                     const testDevice: TestDevice = testDevices[i]
-                    let testCategory: Category|null|undefined = categories.find(s => s.handle===testDevice.handle)
-                    if (!testCategory) {
-                        // Let's create a new one and store the id
-                        await sqldb.createCategory({
-                            categoryId: '', name: testDevice.category, shortName: testDevice.category, handle: testDevice.handle
-                        })
-                        testCategory = await sqldb.getCategoryByHandle(testDevice.handle)
-                    }
                     const testVendor: Vendor|undefined = vendors.find(s => s.name===testDevice.vendorId)
-                    if (testCategory && testVendor) {
-                        // if this is edwards we have product details
-                        const testPricelist = eddyPricelist.find(s => s.PartNumber===testDevice.partNumber)
-                        const testProduct = eddyProducts.find(s => s.PartNumber===testDevice.partNumber)
+                    if (testVendor) {
+                        const testPart = parts.find((s) =>
+                            s.vendorId === testVendor.vendorId &&
+                            String(s.partNumber || s.PartNumber || '').trim().toLowerCase() === String(testDevice.partNumber || '').trim().toLowerCase()
+                        )
                         // Look if we have the material
                         let testMaterial: Material | null | undefined = materials.find(s => s.vendorId===testVendor.vendorId && s.partNumber===testDevice.partNumber)
                         if (!testMaterial) {
@@ -1064,10 +1054,11 @@ export class FieldwireSDK {
                                 name: testDevice.title,
                                 shortName: testDevice.title,
                                 vendorId: testVendor?.vendorId,
-                                categoryId: testCategory?.categoryId,
+                                categoryName: String(testPart?.category ?? testPart?.Category ?? testDevice.category ?? '').trim(),
                                 partNumber: testDevice.partNumber,
-                                link: testProduct?testProduct.ProductID:'',
-                                cost: testPricelist?testPricelist.SalesPrice:(testProduct?testProduct.SalesPrice:0),
+                                link: testPart?.partId || testPart?.ProductID || '',
+                                msrp: Number(testPart?.msrp ?? testPart?.MSRPPrice ?? 0),
+                                cost: Number(testPart?.cost ?? testPart?.SalesPrice ?? testPart?.msrp ?? testPart?.MSRPPrice ?? 0),
                                 defaultLabor: defaultMaterialLabor,
                                 slcAddress: testDevice.slcAddress,
                                 serialNumber: testDevice.serialNumber,
@@ -1087,10 +1078,11 @@ export class FieldwireSDK {
                                     name: testDevice.title,
                                     shortName: testDevice.title,
                                     vendorId: testVendor?.vendorId,
-                                    categoryId: testCategory?.categoryId,
+                                    categoryName: testDevice.category,
+                                    includeOnFloorplan: !!testDevice.category,
                                     partNumber: testDevice.partNumber,
-                                    link: testProduct?testProduct.ProductID:'',
-                                    cost: testPricelist?testPricelist.SalesPrice:(testProduct?testProduct.SalesPrice:0),
+                                    link: testPart?.partId || testPart?.ProductID || '',
+                                    cost: Number(testPart?.cost ?? testPart?.SalesPrice ?? testPart?.msrp ?? testPart?.MSRPPrice ?? 0),
                                     defaultLabor: defaultMaterialLabor,
                                     slcAddress: testDevice.slcAddress,
                                     serialNumber: testDevice.serialNumber,

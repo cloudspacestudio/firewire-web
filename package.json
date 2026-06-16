@@ -6,7 +6,6 @@
   "scripts": {
     "start": "ts-node --project tsconfig.json ./src/index.ts",
     "dev": "nodemon ./src/index.ts",
-    "eddy": "ts-node --project tsconfig.json ./src/eddyimport.ts",
     "security-pricing": "ts-node --project tsconfig.json ./src/security-pricing-import.ts",
     "db:migrate:sqlserver": "ts-node --project tsconfig.json ./src/sqlserver.migrate.ts"
   },

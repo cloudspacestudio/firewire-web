@@ -2,10 +2,11 @@ CREATE TABLE [dbo].[materials](
 	[materialId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,
 	[shortName] [nvarchar](50) NOT NULL,
-	[categoryId] [nvarchar](40) NOT NULL,
 	[vendorId] [nvarchar](40) NOT NULL,
+	[categoryName] [nvarchar](500) NULL,
 	[partNumber] [nvarchar](40) NOT NULL,
 	[link] [nvarchar](1024) NOT NULL,
+	[msrp] [money] NULL,
 	[cost] [money] NOT NULL,
 	[defaultLabor] [smallint] NOT NULL,
 	[slcAddress] [nvarchar](50) NULL,
@@ -37,4 +38,3 @@ GO
 
 ALTER TABLE [dbo].[materials] ADD  DEFAULT ('system') FOR [updateby]
 GO
-

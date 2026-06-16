@@ -1,4 +1,3 @@
-import { Category } from "../repository/category"
 import { Vendor } from "../repository/vendor"
 import { Material } from "../repository/material"
 
@@ -10,7 +9,11 @@ export interface ResolvedDevice {
     link: string
     cost: number
     defaultLabor: number
-    category: Category
+    category: {
+        name: string
+        shortName?: string
+        handle?: string
+    }
     vendor: Vendor
     materials: Material[]
     slcAddress: string

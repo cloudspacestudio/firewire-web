@@ -10,8 +10,10 @@ export interface VwDeviceMaterial {
     materialId: string
     materialName: string
     materialShortName: string
+    materialCategoryName?: string
     materialPartNumber: string
     materialLink: string
+    materialMsrp?: number
     materialCost: number
     materialDefaultLabor: number
     deviceCategoryName: string

@@ -105,6 +105,7 @@ export class FirewireProjectSettingsData {
 function normalizePayload(body: any): FirewireProjectSettingInput {
     return {
         listKey: body?.listKey,
+        division: body?.division,
         label: body?.label,
         description: body?.description,
         sortOrder: body?.sortOrder,

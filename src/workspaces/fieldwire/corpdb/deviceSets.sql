@@ -1,6 +1,8 @@
 CREATE TABLE [dbo].[deviceSets](
     [deviceSetId] [nvarchar](40) NOT NULL,
     [name] [nvarchar](120) NOT NULL,
+    [visibilityJson] [nvarchar](max) NULL,
+    [ownerUserId] [nvarchar](256) NULL,
     [createat] [datetime] NOT NULL,
     [createby] [nvarchar](40) NOT NULL,
     [updateat] [datetime] NOT NULL,

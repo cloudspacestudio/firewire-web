@@ -1,10 +1,11 @@
 import * as express from 'express'
 import multer from 'multer'
 import { parse as parseCsv } from 'csv-parse/sync'
+import * as XLSX from 'xlsx'
 import { SqlDb } from '../../fieldwire/repository/sqldb'
 import { Vendor } from '../../fieldwire/repository/vendor'
-import { VwEddyPricelist } from '../../fieldwire/repository/vwEddyPricelist'
-import { EddyPricelist } from '../../fieldwire/repository/EddyPricelist'
+import { VwPart } from '../../fieldwire/repository/vwpart'
+import { Part } from '../../fieldwire/repository/part'
 import { AzureBlobDocumentStorage } from './azure-blob-document-storage'
 
 const uploadToMemory = multer({
@@ -34,8 +35,8 @@ interface VendorImportConfig {
     targetTable: string
     filePattern?: string
     expectedHeaders: string[]
-    headerMap: Record<string, keyof EddyPricelist>
-    columnTypes: Partial<Record<keyof EddyPricelist, 'string' | 'money' | 'int' | 'date'>>
+    headerMap: Record<string, keyof Part>
+    columnTypes: Partial<Record<keyof Part, 'string' | 'money' | 'int' | 'date'>>
     normalizationSteps: string[]
     analysisSummary: string[]
     verifiedSampleFile?: string
@@ -55,14 +56,39 @@ interface VendorImportPreview {
     unexpectedHeaders: string[]
     issues: string[]
     sampleErrors: string[]
-    sampleRows: EddyPricelist[]
+    sampleRows: Part[]
     snapshotStrategy: string
 }
 
 interface NormalizedImportResult {
     config: VendorImportConfig
     preview: VendorImportPreview
-    normalizedRows: EddyPricelist[]
+    normalizedRows: Part[]
+}
+
+interface BulkPartsWorkbookVendorResult {
+    sheetName: string
+    vendorId?: string
+    vendorName?: string
+    matched: boolean
+    valid: boolean
+    rowCount: number
+    importedRowCount?: number
+    snapshotId?: string
+    runId?: string
+    issues: string[]
+    sampleErrors: string[]
+}
+
+interface BulkPartsWorkbookResult {
+    fileName: string
+    sheetCount: number
+    matchedVendorCount: number
+    skippedSheetCount: number
+    importedVendorCount: number
+    importedRowCount: number
+    valid: boolean
+    results: BulkPartsWorkbookVendorResult[]
 }
 
 interface DeviceVendorLinkIssue {
@@ -77,24 +103,11 @@ interface DeviceVendorLinkIssue {
     ignoreReason?: string | null
 }
 
-interface CategoryReconcileRow {
-    categoryId: string
-    name: string
-    shortName: string
-    handle: string
-    createat?: Date
-    createby?: string
-    updateat?: Date
-    updateby?: string
-    referencedByDeviceParts: boolean
-    devicePartReferenceCount: number
-    sourceVendors: string[]
-    createdByReconcile?: boolean
-}
-
 interface DeviceSetSummaryRow {
     deviceSetId: string
     name: string
+    visibility: string[]
+    ownerUserId?: string | null
     deviceCount: number
     vendors: string[]
     createat?: Date
@@ -104,6 +117,8 @@ interface DeviceSetSummaryRow {
 interface DeviceSetDetailRow {
     deviceSetId: string
     name: string
+    visibility: string[]
+    ownerUserId?: string | null
     devices: any[]
 }
 
@@ -111,6 +126,17 @@ interface StoredWorkspaceResponse {
     workspaceKey: string
     payload: any
     updatedAt?: Date
+}
+
+interface DeviceMediaFile {
+    id: string
+    fileName: string
+    mimeType: string
+    sizeBytes: number
+    uploadedAt: string
+    uploadedBy: string
+    blobContainerName: string
+    blobName: string
 }
 
 export class FirewireData {
@@ -450,16 +476,51 @@ export class FirewireData {
                             })
                         }
 
+                        const linkedMaterials = await sqldb.getDeviceMaterialByDeviceId(deviceId) || []
+                        const linkedPartNumbers = linkedMaterials
+                            .map((material) => String(material.materialPartNumber || material.partNumber || '').trim())
+                            .filter(Boolean)
+                        const hasProjectWorksheetReference = await sqldb.isDeviceOrMaterialReferencedByProjectWorksheet({
+                            deviceId,
+                            partNumbers: [
+                                String(existing.partNumber || '').trim(),
+                                ...linkedPartNumbers
+                            ]
+                        })
+
                         await sqldb.deleteDeviceMaterialMapsByDeviceId(deviceId)
                         await sqldb.deleteMaterialAttributesByMaterialId(deviceId)
                         await sqldb.deleteMaterialSubTasksByMaterialId(deviceId)
                         await sqldb.deleteDeviceVendorLinkIgnoresByDeviceId(deviceId)
                         await sqldb.deleteDeviceSetDevicesByDeviceId(deviceId)
+                        const deletedMediaBlobs = await FirewireData.deleteDeviceMediaWorkspace(sqldb, deviceId)
                         await sqldb.deleteDevice(deviceId)
+
+                        const deletedMaterialIds: string[] = []
+                        const preservedMaterialIds: string[] = []
+                        const cleanupMaterialIds = Array.from(new Set(linkedMaterials
+                            .map((material) => String(material.materialId || '').trim())
+                            .filter(Boolean)))
+
+                        for (const materialId of cleanupMaterialIds) {
+                            const mapCount = await sqldb.getDeviceMaterialMapCountByMaterialId(materialId)
+                            if (mapCount > 0 || hasProjectWorksheetReference) {
+                                preservedMaterialIds.push(materialId)
+                                continue
+                            }
+
+                            await sqldb.deleteMaterialAttributesByMaterialId(materialId)
+                            await sqldb.deleteMaterialSubTasksByMaterialId(materialId)
+                            await sqldb.deleteMaterial(materialId)
+                            deletedMaterialIds.push(materialId)
+                        }
 
                         return res.status(200).json({
                             data: {
-                                deviceId
+                                deviceId,
+                                deletedMaterialIds,
+                                preservedMaterialIds,
+                                deletedMediaBlobs
                             }
                         })
                     } catch (err: Error|any) {
@@ -468,6 +529,178 @@ export class FirewireData {
                         })
                     }
                 })
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/firewire/devices/:deviceId/media',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const deviceId = String(req.params.deviceId || '').trim()
+                    if (!deviceId) {
+                        return res.status(400).json({ message: 'deviceId is required.' })
+                    }
+                    const sqldb = new SqlDb(req.app)
+                    const result = await FirewireData.loadStoredWorkspace(sqldb, 'device-media', deviceId, { files: [] })
+                    return res.status(200).json({ data: result.payload })
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/devices/:deviceId/media',
+            fx: async (req: express.Request, res: express.Response) => {
+                uploadDocLibraryFileToMemory(req, res, async(err) => {
+                    try {
+                        if (err instanceof multer.MulterError) {
+                            return res.status(400).json({ message: err.message })
+                        }
+                        if (err) {
+                            return res.status(500).json({ message: err.message || err })
+                        }
+
+                        const deviceId = String(req.params.deviceId || '').trim()
+                        if (!deviceId) {
+                            return res.status(400).json({ message: 'deviceId is required.' })
+                        }
+                        if (!req.file?.buffer?.length) {
+                            return res.status(400).json({ message: 'file is required.' })
+                        }
+
+                        const sqldb = new SqlDb(req.app)
+                        const device = await sqldb.getDevice(deviceId)
+                        if (!device) {
+                            return res.status(404).json({ message: `Device ${deviceId} not found.` })
+                        }
+
+                        const storage = new AzureBlobDocumentStorage()
+                        if (!storage.isConfigured()) {
+                            return res.status(500).json({
+                                message: 'Azure Blob Storage is not configured. Set FIREWIRE_DOC_LIBRARY_BLOB_CONNECTION_STRING.'
+                            })
+                        }
+
+                        const workspace = await FirewireData.loadStoredWorkspace(sqldb, 'device-media', deviceId, { files: [] })
+                        const files = Array.isArray(workspace.payload?.files) ? workspace.payload.files : []
+                        const fileId = FirewireData.createClientSafeId('media')
+                        const uploadedAt = new Date().toISOString()
+                        const safeName = FirewireData.sanitizeBlobPathSegment(req.file.originalname || 'device-media')
+                        const blobName = [
+                            'device-media',
+                            FirewireData.sanitizeBlobPathSegment(deviceId),
+                            `${FirewireData.sanitizeBlobPathSegment(fileId)}-${safeName}`
+                        ].join('/')
+
+                        await storage.upload({
+                            buffer: req.file.buffer,
+                            containerName: deviceId,
+                            blobName,
+                            contentType: req.file.mimetype || 'application/octet-stream',
+                            metadata: {
+                                deviceId,
+                                fileId
+                            }
+                        })
+
+                        const mediaFile: DeviceMediaFile = {
+                            id: fileId,
+                            fileName: req.file.originalname || 'device-media',
+                            mimeType: req.file.mimetype || 'application/octet-stream',
+                            sizeBytes: req.file.size,
+                            uploadedAt,
+                            uploadedBy: 'Current User',
+                            blobContainerName: storage.getProjectContainerName(deviceId),
+                            blobName
+                        }
+                        const nextPayload = {
+                            ...(workspace.payload || {}),
+                            files: [...files, mediaFile]
+                        }
+                        await sqldb.saveWorkspaceStorage('device-media', deviceId, JSON.stringify(nextPayload), 'system')
+                        return res.status(200).json({ data: nextPayload })
+                    } catch (uploadErr: Error|any) {
+                        return res.status(500).json({
+                            message: uploadErr && uploadErr.message ? uploadErr.message : uploadErr
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'delete',
+            path: '/api/firewire/devices/:deviceId/media/:fileId',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const deviceId = String(req.params.deviceId || '').trim()
+                    const fileId = String(req.params.fileId || '').trim()
+                    if (!deviceId || !fileId) {
+                        return res.status(400).json({ message: 'deviceId and fileId are required.' })
+                    }
+                    const sqldb = new SqlDb(req.app)
+                    const workspace = await FirewireData.loadStoredWorkspace(sqldb, 'device-media', deviceId, { files: [] })
+                    const files = Array.isArray(workspace.payload?.files) ? workspace.payload.files : []
+                    const file = files.find((item: any) => item?.id === fileId)
+                    if (!file) {
+                        return res.status(404).json({ message: 'Device media file was not found.' })
+                    }
+                    if (file.blobName) {
+                        const storage = new AzureBlobDocumentStorage()
+                        await storage.deleteIfExists(file.blobContainerName || deviceId, file.blobName)
+                    }
+                    const nextPayload = {
+                        ...(workspace.payload || {}),
+                        files: files.filter((item: any) => item?.id !== fileId)
+                    }
+                    await sqldb.saveWorkspaceStorage('device-media', deviceId, JSON.stringify(nextPayload), 'system')
+                    return res.status(200).json({ data: nextPayload })
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/firewire/devices/:deviceId/media/:fileId/content',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const deviceId = String(req.params.deviceId || '').trim()
+                    const fileId = String(req.params.fileId || '').trim()
+                    if (!deviceId || !fileId) {
+                        return res.status(400).json({ message: 'deviceId and fileId are required.' })
+                    }
+                    const sqldb = new SqlDb(req.app)
+                    const workspace = await FirewireData.loadStoredWorkspace(sqldb, 'device-media', deviceId, { files: [] })
+                    const files = Array.isArray(workspace.payload?.files) ? workspace.payload.files : []
+                    const file = files.find((item: any) => item?.id === fileId)
+                    if (!file?.blobName) {
+                        return res.status(404).json({ message: 'Device media file was not found.' })
+                    }
+
+                    const storage = new AzureBlobDocumentStorage()
+                    if (!storage.isConfigured()) {
+                        return res.status(500).json({
+                            message: 'Azure Blob Storage is not configured. Set FIREWIRE_DOC_LIBRARY_BLOB_CONNECTION_STRING.'
+                        })
+                    }
+
+                    const result = await storage.download(file.blobContainerName || deviceId, file.blobName)
+                    const disposition = String(req.query.disposition || '').toLowerCase() === 'attachment' ? 'attachment' : 'inline'
+                    const fileName = FirewireData.escapeHeaderFileName(file.fileName || 'device-media')
+                    res.setHeader('Content-Type', result.contentType || file.mimeType || 'application/octet-stream')
+                    res.setHeader('Content-Disposition', `${disposition}; filename="${fileName}"`)
+                    res.setHeader('Content-Length', String(result.buffer.length))
+                    return res.status(200).send(result.buffer)
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
             }
         },
         // Update Device Detail
@@ -492,7 +725,10 @@ export class FirewireData {
                         }
 
                         const vendorId = String(req.body?.device?.vendorId || existing.vendorId || '').trim()
-                        const categoryId = String(req.body?.device?.categoryId || existing.categoryId || '').trim()
+                        const categoryName = String(req.body?.device?.categoryName ?? existing.categoryName ?? '').trim()
+                        const includeOnFloorplan = typeof req.body?.device?.includeOnFloorplan === 'undefined'
+                            ? !!existing.includeOnFloorplan
+                            : !!req.body.device.includeOnFloorplan
                         const vendor = await sqldb.getVendorById(vendorId)
                         if (!vendor) {
                             return res.status(404).json({
@@ -505,7 +741,8 @@ export class FirewireData {
                             name: String(req.body?.device?.name || existing.name || '').trim(),
                             shortName: String(req.body?.device?.shortName || existing.shortName || '').trim(),
                             vendorId,
-                            categoryId,
+                            categoryName,
+                            includeOnFloorplan,
                             partNumber: String(req.body?.device?.partNumber || existing.partNumber || '').trim(),
                             link: String(req.body?.device?.link || '').trim(),
                             cost: Number(req.body?.device?.cost ?? existing.cost ?? 0),
@@ -523,10 +760,6 @@ export class FirewireData {
                                 .filter((value: string): value is string => !!value)))
                             : []
 
-                        await FirewireData.ensureCategoriesExistForVendorPartNumbers(sqldb, vendor, [
-                            String(req.body?.device?.partNumber || existing.partNumber || '').trim()
-                        ])
-
                         const materialIds: string[] = []
                         for (const partNumber of desiredPartNumbers) {
                             let material = await sqldb.getMaterialByVendorAndPartNumber(vendorId, partNumber)
@@ -542,9 +775,10 @@ export class FirewireData {
                                     name: String(partRecord.LongDescription || partNumber),
                                     shortName: partNumber,
                                     vendorId,
-                                    categoryId,
+                                    categoryName: String(partRecord.Category || partRecord.ParentCategory || categoryName || '').trim(),
                                     partNumber,
                                     link: '',
+                                    msrp: Number(partRecord.MSRPPrice || 0),
                                     cost: Number(partRecord.SalesPrice || partRecord.MSRPPrice || existing.cost || 0),
                                     defaultLabor: Number(existing.defaultLabor || 0),
                                     slcAddress: '',
@@ -702,8 +936,12 @@ export class FirewireData {
                             })
                         }
                         const sqldb: SqlDb = new SqlDb(req.app)
+                        const visibility = FirewireData.normalizeDeviceSetVisibility(req.body?.visibility)
+                        const userId = FirewireData.resolveUserId(req)
                         const deviceSetId = await sqldb.createDeviceSet({
                             name,
+                            visibility,
+                            ownerUserId: userId,
                             createdBy: 'device-sets'
                         })
                         const result = await FirewireData.buildDeviceSetDetail(sqldb, deviceSetId)
@@ -770,9 +1008,15 @@ export class FirewireData {
                                 message: `Device Set ${deviceSetId} not found.`
                             })
                         }
+                        const normalizedVisibility = Array.isArray(req.body?.visibility)
+                            ? FirewireData.normalizeDeviceSetVisibility(req.body.visibility)
+                            : undefined
+                        const userId = FirewireData.resolveUserId(req)
                         await sqldb.updateDeviceSet({
                             deviceSetId,
                             name,
+                            visibility: normalizedVisibility,
+                            ownerUserId: normalizedVisibility?.includes('current-user') ? userId : existing.ownerUserId || '',
                             updatedBy: 'device-sets'
                         })
                         const result = await FirewireData.buildDeviceSetDetail(sqldb, deviceSetId)
@@ -1094,237 +1338,6 @@ export class FirewireData {
             }
         },
         // Get Categories
-        {
-            method: 'get',
-            path: '/api/firewire/categories',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getCategories()
-                        return res.status(200).json({
-                            rows: result
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Get Category
-        {
-            method: 'get',
-            path: '/api/firewire/categories/:categoryId',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const categoryId = String(req.params.categoryId || '').trim()
-                        if (!categoryId) {
-                            return res.status(400).json({
-                                message: 'categoryId is required.'
-                            })
-                        }
-
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getCategoryById(categoryId)
-                        if (!result) {
-                            return res.status(404).json({
-                                message: `Category ${categoryId} not found.`
-                            })
-                        }
-                        return res.status(200).json({
-                            data: result
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Get Devices Using Category
-        {
-            method: 'get',
-            path: '/api/firewire/categories/:categoryId/devices',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const categoryId = String(req.params.categoryId || '').trim()
-                        if (!categoryId) {
-                            return res.status(400).json({
-                                message: 'categoryId is required.'
-                            })
-                        }
-
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const devices = await sqldb.getVwDevices()
-                        return res.status(200).json({
-                            rows: devices.filter((row) => String(row.categoryId || '').trim() === categoryId)
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Update Category
-        {
-            method: 'patch',
-            path: '/api/firewire/categories/:categoryId',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const categoryId = String(req.params.categoryId || req.body?.categoryId || '').trim()
-                        if (!categoryId) {
-                            return res.status(400).json({
-                                message: 'categoryId is required.'
-                            })
-                        }
-
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const existing = await sqldb.getCategoryById(categoryId)
-                        if (!existing) {
-                            return res.status(404).json({
-                                message: `Category ${categoryId} not found.`
-                            })
-                        }
-
-                        const name = String(req.body?.name || existing.name || '').trim()
-                        const shortName = String(req.body?.shortName || existing.shortName || '').trim()
-                        const handle = String(req.body?.handle || existing.handle || '').trim()
-                        const defaultLabor = req.body?.defaultLabor === null || typeof req.body?.defaultLabor === 'undefined' || req.body?.defaultLabor === ''
-                            ? null
-                            : Number(req.body.defaultLabor)
-                        const includeOnFloorplan = !!req.body?.includeOnFloorplan
-                        const slcAddress = String(req.body?.slcAddress ?? existing.slcAddress ?? '').trim()
-                        const speakerAddress = String(req.body?.speakerAddress ?? existing.speakerAddress ?? '').trim()
-                        const strobeAddress = String(req.body?.strobeAddress ?? existing.strobeAddress ?? '').trim()
-                        if (!name || !shortName || !handle) {
-                            return res.status(400).json({
-                                message: 'name, shortName, and handle are required.'
-                            })
-                        }
-                        if (handle.length > 10) {
-                            return res.status(400).json({
-                                message: 'handle must be 10 characters or fewer.'
-                            })
-                        }
-
-                        const allCategories = await sqldb.getCategories()
-                        const duplicate = allCategories.find((row) =>
-                            row.categoryId !== categoryId &&
-                            String(row.handle || '').trim().toLowerCase() === handle.toLowerCase()
-                        )
-                        if (duplicate) {
-                            return res.status(409).json({
-                                message: `Handle ${handle} is already used by category ${duplicate.name}.`
-                            })
-                        }
-
-                        await sqldb.updateCategory({
-                            ...existing,
-                            categoryId,
-                            name,
-                            shortName,
-                            handle,
-                            defaultLabor,
-                            includeOnFloorplan,
-                            slcAddress,
-                            speakerAddress,
-                            strobeAddress,
-                            updateby: 'category-grid-edit'
-                        })
-
-                        return res.status(200).json({
-                            data: {
-                                categoryId,
-                                name,
-                                shortName,
-                                handle,
-                                defaultLabor,
-                                includeOnFloorplan,
-                                slcAddress,
-                                speakerAddress,
-                                strobeAddress
-                            }
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Delete Category
-        {
-            method: 'delete',
-            path: '/api/firewire/categories/:categoryId',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const categoryId = String(req.params.categoryId || '').trim()
-                        if (!categoryId) {
-                            return res.status(400).json({
-                                message: 'categoryId is required.'
-                            })
-                        }
-
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const categories = await sqldb.getCategories()
-                        const existing = categories.find((row) => String(row.categoryId || '').trim() === categoryId) || null
-                        if (!existing) {
-                            return res.status(404).json({
-                                message: `Category ${categoryId} not found.`
-                            })
-                        }
-
-                        const [devices, materials] = await Promise.all([sqldb.getVwDevices(), sqldb.getMaterials()])
-                        const deviceCount = devices.filter((row) => String(row.categoryId || '').trim() === categoryId).length
-                        const materialCount = materials.filter((row) => String(row.categoryId || '').trim() === categoryId).length
-                        if (deviceCount > 0 || materialCount > 0) {
-                            return res.status(409).json({
-                                message: `Category ${existing.name} is still in use by ${deviceCount} devices and ${materialCount} materials.`
-                            })
-                        }
-
-                        await sqldb.deleteCategory(categoryId)
-                        return res.status(200).json({
-                            data: {
-                                categoryId
-                            }
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Reconcile Categories Used By Device Parts
-        {
-            method: 'post',
-            path: '/api/firewire/categories/reconcile',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await FirewireData.reconcileCategoriesFromDeviceParts(sqldb)
-                        return res.status(200).json(result)
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
         // Get Vendors
         {
             method: 'get',
@@ -1521,15 +1534,15 @@ export class FirewireData {
                 })
             }
         },
-        // Get Eddy Products
+        // Get master parts
         {
             method: 'get',
-            path: '/api/firewire/eddyproducts',
+            path: '/api/firewire/parts',
             fx: (req: express.Request, res: express.Response) => {
                 return new Promise(async(resolve, reject) => {
                     try {
                         const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getEddyProducts()
+                        const result = await sqldb.getParts()
                         return res.status(200).json({
                             rows: result
                         })
@@ -1541,55 +1554,10 @@ export class FirewireData {
                 })
             }
         },
-        // Get Eddy Pricelist
+        // Get master parts by Part Number
         {
             method: 'get',
-            path: '/api/firewire/eddypricelist',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getEddyPricelist()
-                        return res.status(200).json({
-                            rows: result
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Get View Eddy Pricelist combined with Eddy Products
-        {
-            method: 'get',
-            path: '/api/firewire/vweddypricelist',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getVwEddyPricelist()
-                        const vendor = await FirewireData.resolveEdwardsVendor(sqldb)
-                        return res.status(200).json({
-                            rows: result.map((row) => ({
-                                ...row,
-                                vendorId: vendor?.vendorId || null,
-                                vendorName: vendor?.name || 'Edwards'
-                            }))
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Get View Eddy Pricelist combined with Eddy Products by Part Number
-        {
-            method: 'get',
-            path: '/api/firewire/vweddypricelist/:partNumber',
+            path: '/api/firewire/parts/:partNumber',
             fx: (req: express.Request, res: express.Response) => {
                 return new Promise(async(resolve, reject) => {
                     try {
@@ -1600,14 +1568,9 @@ export class FirewireData {
                             })
                         }
                         const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getVwEddyPricelistByPartNumber(partNumber)
-                        const vendor = await FirewireData.resolveEdwardsVendor(sqldb)
+                        const result = await sqldb.getPartByPartNumber(partNumber)
                         return res.status(200).json({
-                            rows: result.map((row) => ({
-                                ...row,
-                                vendorId: vendor?.vendorId || null,
-                                vendorName: vendor?.name || 'Edwards'
-                            }))
+                            rows: result
                         })
                     } catch (err: Error|any) {
                         return res.status(500).json({
@@ -1617,7 +1580,7 @@ export class FirewireData {
                 })
             }
         },
-        // Get generic vendor parts in Eddy-compatible shape
+        // Get vendor parts
         {
             method: 'get',
             path: '/api/firewire/vendors/:vendorId/parts',
@@ -1633,7 +1596,7 @@ export class FirewireData {
                         if (!vendor) {
                             return res.status(404).json({ message: `Vendor ${vendorId} not found.` })
                         }
-                        const result = await sqldb.getVendorPricelist(vendorId)
+                        const result = await sqldb.getPartsByVendor(vendorId)
                         return res.status(200).json({ rows: result })
                     } catch (err: Error|any) {
                         return res.status(500).json({
@@ -1656,8 +1619,45 @@ export class FirewireData {
                             return res.status(400).json({ message: 'vendorId and partNumber are required.' })
                         }
                         const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getVendorPricelistByPartNumber(vendorId, partNumber)
+                        const result = await sqldb.getPartByVendorAndPartNumber(vendorId, partNumber)
                         return res.status(200).json({ rows: result })
+                    } catch (err: Error|any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Delete generic vendor part by part number
+        {
+            method: 'delete',
+            path: '/api/firewire/vendors/:vendorId/parts/:partNumber',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const vendorId = String(req.params.vendorId || '').trim()
+                        const partNumber = String(req.params.partNumber || '').trim()
+                        if (!vendorId || !partNumber) {
+                            return res.status(400).json({ message: 'vendorId and partNumber are required.' })
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const vendor = await sqldb.getVendorById(vendorId)
+                        if (!vendor) {
+                            return res.status(404).json({ message: `Vendor ${vendorId} not found.` })
+                        }
+                        const rows = await sqldb.getPartByVendorAndPartNumber(vendorId, partNumber)
+                        const part = Array.isArray(rows) && rows.length > 0 ? rows[0] as VwPart : null
+                        if (!part) {
+                            return res.status(404).json({ message: `Part ${partNumber} not found for ${vendor.name}.` })
+                        }
+                        await sqldb.deletePartByVendorAndPartNumber(vendorId, partNumber)
+                        return res.status(200).json({
+                            data: {
+                                vendorId,
+                                partNumber
+                            }
+                        })
                     } catch (err: Error|any) {
                         return res.status(500).json({
                             message: err && err.message ? err.message : err
@@ -1680,8 +1680,8 @@ export class FirewireData {
                         if (!vendor) {
                             return res.status(404).json({ message: `Vendor ${vendorId} not found.` })
                         }
-                        const rows = await sqldb.getVendorPricelistByPartNumber(vendorId, partNumber)
-                        const part = Array.isArray(rows) && rows.length > 0 ? rows[0] as VwEddyPricelist : null
+                        const rows = await sqldb.getPartByVendorAndPartNumber(vendorId, partNumber)
+                        const part = Array.isArray(rows) && rows.length > 0 ? rows[0] as VwPart : null
                         if (!part) {
                             return res.status(404).json({ message: `Part ${partNumber} not found for ${vendor.name}.` })
                         }
@@ -1712,8 +1712,8 @@ export class FirewireData {
                         if (!vendor) {
                             return res.status(404).json({ message: `Vendor ${vendorId} not found.` })
                         }
-                        const rows = await sqldb.getVendorPricelistByPartNumber(vendorId, partNumber)
-                        const part = Array.isArray(rows) && rows.length > 0 ? rows[0] as VwEddyPricelist : null
+                        const rows = await sqldb.getPartByVendorAndPartNumber(vendorId, partNumber)
+                        const part = Array.isArray(rows) && rows.length > 0 ? rows[0] as VwPart : null
                         if (!part) {
                             return res.status(404).json({ message: `Part ${partNumber} not found for ${vendor.name}.` })
                         }
@@ -1728,229 +1728,7 @@ export class FirewireData {
                 })
             }
         },
-        // Create Device using Edwards Part
-        {
-            method: 'post',
-            path: '/api/firewire/eddypricelist/:partNumber/create-device',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const partNumber = String(req.params.partNumber || '').trim()
-                        const name = String(req.body?.name || '').trim()
-                        const shortName = String(req.body?.shortName || '').trim()
-                        const categoryId = String(req.body?.categoryId || '').trim()
-                        const categoryName = String(req.body?.categoryName || '').trim()
-
-                        if (!partNumber || !name || !shortName || !categoryId) {
-                            return res.status(400).json({
-                                message: 'partNumber, name, shortName, and categoryId are required.'
-                            })
-                        }
-
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const partRows = await sqldb.getVwEddyPricelistByPartNumber(partNumber)
-                        const part = Array.isArray(partRows) && partRows.length > 0 ? partRows[0] as VwEddyPricelist : null
-                        if (!part) {
-                            return res.status(404).json({
-                                message: `Part ${partNumber} not found in Edwards pricelist.`
-                            })
-                        }
-
-                        const vendor = await FirewireData.requireEdwardsVendor(sqldb, res)
-                        if (!vendor) {
-                            return
-                        }
-
-                        const safeDeviceName = FirewireData.getSafeDeviceName(name, partNumber)
-                        const safeShortName = FirewireData.limitText(shortName || partNumber, 50) || partNumber
-                        const safeMaterialName = FirewireData.getSafeDeviceName(name || String(part?.LongDescription || ''), partNumber)
-
-                        await FirewireData.ensureCategoriesExistForVendorPartNumbers(sqldb, vendor, [partNumber])
-                        if (categoryName) {
-                            await FirewireData.ensureCategoryExistsByName(sqldb, categoryName, 'device-category-sync')
-                        }
-
-                        const categories = await sqldb.getCategories()
-                        const normalizedCategoryName = FirewireData.normalizeCategoryName(categoryName)
-                        const category = categories.find((row) =>
-                            row.categoryId === categoryId
-                            || (!!normalizedCategoryName && FirewireData.normalizeCategoryName(row.name) === normalizedCategoryName)
-                        )
-                        if (!category) {
-                            return res.status(404).json({
-                                message: `Category ${categoryName || categoryId} not found.`
-                            })
-                        }
-
-                        const existingDevice = await sqldb.getDeviceByVendorAndPartNumber(vendor.vendorId, partNumber)
-                        if (existingDevice) {
-                            return res.status(409).json({
-                                message: `A device already exists for ${partNumber} under vendor ${vendor.name}.`,
-                                data: existingDevice
-                            })
-                        }
-
-                        let material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
-                        let createdMaterial = false
-                        const categoryDefaultLabor = typeof category.defaultLabor === 'number' ? Number(category.defaultLabor) : 112
-                        const categorySlcAddress = String(category.slcAddress || '').trim()
-                        const categorySpeakerAddress = String(category.speakerAddress || '').trim()
-                        const categoryStrobeAddress = String(category.strobeAddress || '').trim()
-                        if (!material) {
-                            await sqldb.createMaterial({
-                                materialId: '',
-                                name: safeMaterialName,
-                                shortName: safeShortName,
-                                vendorId: vendor.vendorId,
-                                categoryId: category.categoryId,
-                                partNumber,
-                                link: '',
-                                cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                                defaultLabor: categoryDefaultLabor,
-                                slcAddress: categorySlcAddress,
-                                serialNumber: '',
-                                strobeAddress: categoryStrobeAddress,
-                                speakerAddress: categorySpeakerAddress
-                            })
-                            material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
-                            createdMaterial = true
-                        }
-
-                        await sqldb.createDevice({
-                            deviceId: '',
-                            name: safeDeviceName,
-                            shortName: safeShortName,
-                            vendorId: vendor.vendorId,
-                            categoryId: category.categoryId,
-                            partNumber,
-                            link: '',
-                            cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                            defaultLabor: categoryDefaultLabor,
-                            slcAddress: categorySlcAddress,
-                            serialNumber: '',
-                            strobeAddress: categoryStrobeAddress,
-                            speakerAddress: categorySpeakerAddress
-                        })
-
-                        const device = await sqldb.getDeviceByVendorAndPartNumber(vendor.vendorId, partNumber)
-                        if (!device) {
-                            return res.status(500).json({
-                                message: 'Device was created but could not be reloaded.'
-                            })
-                        }
-
-                        if (material) {
-                            const existingMap = await sqldb.getDeviceMaterialByIds(device.deviceId, material.materialId)
-                            if (!existingMap) {
-                                await sqldb.createDeviceMaterialMap(device.deviceId, material.materialId)
-                            }
-                        }
-
-                        return res.status(201).json({
-                            data: {
-                                device,
-                                material,
-                                createdMaterial
-                            }
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Add Edwards Part to Existing Device
-        {
-            method: 'post',
-            path: '/api/firewire/eddypricelist/:partNumber/add-to-device',
-            fx: (req: express.Request, res: express.Response) => {
-                return new Promise(async(resolve, reject) => {
-                    try {
-                        const partNumber = String(req.params.partNumber || '').trim()
-                        const deviceId = String(req.body?.deviceId || '').trim()
-
-                        if (!partNumber || !deviceId) {
-                            return res.status(400).json({
-                                message: 'partNumber and deviceId are required.'
-                            })
-                        }
-
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const device = await sqldb.getDevice(deviceId)
-                        if (!device) {
-                            return res.status(404).json({
-                                message: `Device ${deviceId} not found.`
-                            })
-                        }
-
-                        const partRows = await sqldb.getVwEddyPricelistByPartNumber(partNumber)
-                        const part = Array.isArray(partRows) && partRows.length > 0 ? partRows[0] as VwEddyPricelist : null
-                        if (!part) {
-                            return res.status(404).json({
-                                message: `Part ${partNumber} not found in Edwards pricelist.`
-                            })
-                        }
-
-                        let material = await sqldb.getMaterialByVendorAndPartNumber(device.vendorId, partNumber)
-                        let createdMaterial = false
-                        if (!material) {
-                            await sqldb.createMaterial({
-                                materialId: '',
-                                name: part.LongDescription || device.name,
-                                shortName: device.shortName || partNumber,
-                                vendorId: device.vendorId,
-                                categoryId: device.categoryId,
-                                partNumber,
-                                link: '',
-                                cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                                defaultLabor: Number(device.defaultLabor || 112),
-                                slcAddress: '',
-                                serialNumber: '',
-                                strobeAddress: '',
-                                speakerAddress: ''
-                            })
-                            material = await sqldb.getMaterialByVendorAndPartNumber(device.vendorId, partNumber)
-                            createdMaterial = true
-                        }
-
-                        if (!material) {
-                            return res.status(500).json({
-                                message: 'Material could not be created or loaded.'
-                            })
-                        }
-
-                        const existingMap = await sqldb.getDeviceMaterialByIds(device.deviceId, material.materialId)
-                        if (existingMap) {
-                            return res.status(200).json({
-                                data: {
-                                    device,
-                                    material,
-                                    createdMaterial,
-                                    createdMap: false
-                                }
-                            })
-                        }
-
-                        await sqldb.createDeviceMaterialMap(device.deviceId, material.materialId)
-                        return res.status(201).json({
-                            data: {
-                                device,
-                                material,
-                                createdMaterial,
-                                createdMap: true
-                            }
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
-                })
-            }
-        },
-        // Preview Vendor Parts Import
+        // Preview Vendor parts Import
         {
             method: 'post',
             path: '/api/firewire/vendors/:vendorId/parts-import/preview',
@@ -1991,7 +1769,7 @@ export class FirewireData {
                 })
             }
         },
-        // Execute Vendor Parts Import
+        // Execute Vendor parts Import
         {
             method: 'post',
             path: '/api/firewire/vendors/:vendorId/parts-import',
@@ -2027,13 +1805,13 @@ export class FirewireData {
                                 data: normalized.preview
                             })
                         }
-                        if (normalized.config.targetTable !== 'EddyPricelist') {
+                        if (normalized.config.targetTable !== 'parts') {
                             return res.status(400).json({
                                 message: `Unsupported target table ${normalized.config.targetTable}.`
                             })
                         }
 
-                        const existingRows = await sqldb.getAllEddyPricelist()
+                        const existingRows = await sqldb.getRawPartsByVendor(vendorId)
                         const snapshotId = await sqldb.createVendorImportSnapshot({
                             vendorId,
                             targetTable: normalized.config.targetTable,
@@ -2049,7 +1827,7 @@ export class FirewireData {
                             createdBy: 'system'
                         })
 
-                        await sqldb.replaceEddyPricelist(normalized.normalizedRows)
+                        await sqldb.replacePartsForVendor(vendorId, normalized.normalizedRows)
                         const runId = await sqldb.createVendorImportRun({
                             vendorId,
                             targetTable: normalized.config.targetTable,
@@ -2079,7 +1857,64 @@ export class FirewireData {
                 })
             }
         },
-        // Get Vendor Parts Import Snapshots
+        // Preview All Vendor Parts Workbook Import
+        {
+            method: 'post',
+            path: '/api/firewire/parts-import/workbook/preview',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const file = await FirewireData.getUpload(req, res)
+                        if (!file) {
+                            return res.status(400).json({
+                                message: 'Invalid payload: missing file form field.'
+                            })
+                        }
+
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const result = await FirewireData.buildBulkPartsWorkbookResult(sqldb, file.originalname, file.buffer, false)
+                        return res.status(200).json({ data: result })
+                    } catch (err: Error|any) {
+                        return res.status(err instanceof multer.MulterError ? 400 : 500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Execute All Vendor Parts Workbook Import
+        {
+            method: 'post',
+            path: '/api/firewire/parts-import/workbook',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const file = await FirewireData.getUpload(req, res)
+                        if (!file) {
+                            return res.status(400).json({
+                                message: 'Invalid payload: missing file form field.'
+                            })
+                        }
+
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const preview = await FirewireData.buildBulkPartsWorkbookResult(sqldb, file.originalname, file.buffer, false)
+                        if (!preview.valid) {
+                            return res.status(400).json({
+                                message: 'Workbook import verification failed.',
+                                data: preview
+                            })
+                        }
+                        const result = await FirewireData.buildBulkPartsWorkbookResult(sqldb, file.originalname, file.buffer, true)
+                        return res.status(201).json({ data: result })
+                    } catch (err: Error|any) {
+                        return res.status(err instanceof multer.MulterError ? 400 : 500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        // Get Vendor parts Import Snapshots
         {
             method: 'get',
             path: '/api/firewire/vendors/:vendorId/parts-import-snapshots',
@@ -2087,7 +1922,7 @@ export class FirewireData {
                 return new Promise(async(resolve, reject) => {
                     try {
                         const vendorId = String(req.params.vendorId || '').trim()
-                        const targetTable = String(req.query?.targetTable || 'EddyPricelist').trim()
+                        const targetTable = FirewireData.normalizePartsTargetTable(req.query?.targetTable)
                         if (!vendorId) {
                             return res.status(400).json({
                                 message: 'vendorId is required.'
@@ -2115,7 +1950,7 @@ export class FirewireData {
                 })
             }
         },
-        // Get Vendor Parts Import Status
+        // Get Vendor parts Import Status
         {
             method: 'get',
             path: '/api/firewire/vendors/:vendorId/parts-import-status',
@@ -2123,7 +1958,7 @@ export class FirewireData {
                 return new Promise(async(resolve, reject) => {
                     try {
                         const vendorId = String(req.params.vendorId || '').trim()
-                        const targetTable = String(req.query?.targetTable || 'EddyPricelist').trim()
+                        const targetTable = FirewireData.normalizePartsTargetTable(req.query?.targetTable)
                         if (!vendorId) {
                             return res.status(400).json({
                                 message: 'vendorId is required.'
@@ -2145,7 +1980,7 @@ export class FirewireData {
                 })
             }
         },
-        // Restore Vendor Parts Import Snapshot
+        // Restore Vendor parts Import Snapshot
         {
             method: 'post',
             path: '/api/firewire/vendors/:vendorId/parts-import-snapshots/:snapshotId/restore',
@@ -2166,7 +2001,7 @@ export class FirewireData {
                                 message: `Snapshot ${snapshotId} not found for vendor ${vendorId}.`
                             })
                         }
-                        if (snapshot.targetTable !== 'EddyPricelist') {
+                        if (snapshot.targetTable !== 'parts') {
                             return res.status(400).json({
                                 message: `Unsupported restore target ${snapshot.targetTable}.`
                             })
@@ -2177,7 +2012,7 @@ export class FirewireData {
                                 message: 'Snapshot payload is invalid.'
                             })
                         }
-                        await sqldb.replaceEddyPricelist(rows as EddyPricelist[])
+                        await sqldb.replacePartsForVendor(vendorId, rows as Part[])
                         const runId = await sqldb.createVendorImportRun({
                             vendorId,
                             targetTable: snapshot.targetTable,
@@ -2303,81 +2138,54 @@ export class FirewireData {
         }
     }
     private static buildDefaultVendorImportConfig(vendor: Vendor): VendorImportConfig | null {
-        if (!/edwards|edward/i.test(String(vendor.name || ''))) {
-            return null
-        }
+        const vendorName = String(vendor.name || 'Vendor').trim() || 'Vendor'
+        const vendorKey = FirewireData.slugify(vendorName)
         return {
-            partsVendorKey: 'edwards',
-            sourceLabel: 'myEddie Edwards price list CSV export',
-            targetTable: 'EddyPricelist',
-            filePattern: '*.csv',
+            partsVendorKey: vendorKey,
+            sourceLabel: `${vendorName} parts import`,
+            targetTable: 'parts',
+            filePattern: '*.csv,*.xlsx,*.xls',
             expectedHeaders: [
-                'Parent Category',
-                'Category',
-                'Part Number',
-                'Long Description',
-                'MSRP/Trade Price',
-                'Sales Price',
-                'Future MSRP/Trade Price',
-                'Future MSRP/Trade Price Effective Date',
-                'Future Sales Price',
-                'Future Sales Price Effective Date',
-                'Minimum Order Quantity',
-                'Product Status',
-                'Agency',
-                'COO',
-                'UPC'
+                'PART NUMBER',
+                'DESCRIPTION',
+                'PARENT CATEGORY',
+                'CATEGORY',
+                'MSRP',
+                'MIN QTY',
+                'UPC',
+                'COST'
             ],
             headerMap: {
-                'Parent Category': 'ParentCategory',
-                'Category': 'Category',
-                'Part Number': 'PartNumber',
-                'Long Description': 'LongDescription',
-                'MSRP/Trade Price': 'MSRPPrice',
-                'Sales Price': 'SalesPrice',
-                'Future MSRP/Trade Price': 'FuturePrice',
-                'Future MSRP/Trade Price Effective Date': 'FutureEffectiveDate',
-                'Future Sales Price': 'FutureSalesPrice',
-                'Future Sales Price Effective Date': 'FutureSalesEffectiveDate',
-                'Minimum Order Quantity': 'MinOrderQuantity',
-                'Product Status': 'ProductStatus',
-                'Agency': 'Agency',
-                'COO': 'CountryOfOrigin',
-                'UPC': 'UPC'
+                'PART NUMBER': 'partNumber',
+                'DESCRIPTION': 'description',
+                'PARENT CATEGORY': 'parentCategory',
+                'CATEGORY': 'category',
+                'MSRP': 'msrp',
+                'MIN QTY': 'minQty',
+                'UPC': 'upc',
+                'COST': 'cost'
             },
             columnTypes: {
-                ParentCategory: 'string',
-                Category: 'string',
-                PartNumber: 'string',
-                LongDescription: 'string',
-                MSRPPrice: 'money',
-                SalesPrice: 'money',
-                FuturePrice: 'money',
-                FutureEffectiveDate: 'date',
-                FutureSalesPrice: 'money',
-                FutureSalesEffectiveDate: 'date',
-                MinOrderQuantity: 'int',
-                ProductStatus: 'string',
-                Agency: 'string',
-                CountryOfOrigin: 'string',
-                UPC: 'string'
+                partNumber: 'string',
+                description: 'string',
+                parentCategory: 'string',
+                category: 'string',
+                msrp: 'money',
+                minQty: 'int',
+                upc: 'string',
+                cost: 'money'
             },
             normalizationSteps: [
-                'Map CSV headers to EddyPricelist column names before load.',
-                'Strip currency symbols and commas from price fields.',
-                'Convert future effective date values like M/D/YYYY 12:00:00 AM into SQL date values.',
-                'Normalize straight double quotes in text fields into smart quotes during import.',
+                'Map vendor file headers to canonical parts column names before load.',
+                'Treat part numbers as text identifiers, including values Excel formatted as currency.',
+                'Strip currency symbols and commas from MSRP and cost fields.',
                 'Allow blanks to load as NULL for nullable columns.',
-                'Backup the current EddyPricelist rows before replacing them.'
+                'Backup the current vendor parts rows before replacing them.'
             ],
             analysisSummary: [
-                'Verified against file 82001474_074054.csv on 2026-03-26.',
-                'Header names do not directly match the EddyPricelist table and require mapping.',
-                'Observed 5,351 data rows in the verified sample export.',
-                'Column lengths observed in the sample fit within the current SQL schema.'
+                'Default master parts import configuration.',
+                'Expected headers match the canonical master parts fields.'
             ],
-            verifiedSampleFile: '82001474_074054.csv',
-            verifiedOn: '2026-03-26',
             replaceMode: 'truncate-and-load',
             snapshotTable: 'vendorImportSnapshots'
         }
@@ -2386,9 +2194,9 @@ export class FirewireData {
         const base = raw && typeof raw === 'object' ? raw : {}
         return {
             partsVendorKey: String(base.partsVendorKey || '').trim() || 'vendor',
-            sourceLabel: String(base.sourceLabel || '').trim() || 'Vendor CSV import',
-            targetTable: String(base.targetTable || '').trim() || 'EddyPricelist',
-            filePattern: String(base.filePattern || '').trim() || '*.csv',
+            sourceLabel: String(base.sourceLabel || '').trim() || 'Vendor parts import',
+            targetTable: FirewireData.normalizePartsTargetTable(base.targetTable),
+            filePattern: String(base.filePattern || '').trim() || '*.csv,*.xlsx,*.xls',
             expectedHeaders: Array.isArray(base.expectedHeaders) ? base.expectedHeaders.map((value: unknown) => String(value || '').trim()).filter(Boolean) : [],
             headerMap: FirewireData.normalizeHeaderMap(base.headerMap),
             columnTypes: FirewireData.normalizeColumnTypes(base.columnTypes),
@@ -2400,60 +2208,79 @@ export class FirewireData {
             snapshotTable: String(base.snapshotTable || '').trim() || 'vendorImportSnapshots'
         }
     }
-    private static normalizeHeaderMap(raw: any): Record<string, keyof EddyPricelist> {
-        const output: Record<string, keyof EddyPricelist> = {}
+    private static normalizePartsTargetTable(value: unknown): string {
+        return 'parts'
+    }
+    private static slugify(value: string): string {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'vendor'
+    }
+    private static normalizeHeaderMap(raw: any): Record<string, keyof Part> {
+        const output: Record<string, keyof Part> = {}
         if (!raw || typeof raw !== 'object') {
             return output
         }
         for (const [key, value] of Object.entries(raw)) {
             const header = String(key || '').trim()
-            const target = String(value || '').trim() as keyof EddyPricelist
+            const target = String(value || '').trim() as keyof Part
             if (header && target) {
                 output[header] = target
             }
         }
         return output
     }
-    private static normalizeColumnTypes(raw: any): Partial<Record<keyof EddyPricelist, 'string' | 'money' | 'int' | 'date'>> {
-        const output: Partial<Record<keyof EddyPricelist, 'string' | 'money' | 'int' | 'date'>> = {}
+    private static normalizeColumnTypes(raw: any): Partial<Record<keyof Part, 'string' | 'money' | 'int' | 'date'>> {
+        const output: Partial<Record<keyof Part, 'string' | 'money' | 'int' | 'date'>> = {}
         if (!raw || typeof raw !== 'object') {
             return output
         }
         for (const [key, value] of Object.entries(raw)) {
             const type = String(value || '').trim()
             if (type === 'string' || type === 'money' || type === 'int' || type === 'date') {
-                output[key as keyof EddyPricelist] = type
+                output[key as keyof Part] = type
             }
         }
         return output
     }
     private static async buildNormalizedImportResult(sqldb: SqlDb, vendor: Vendor, fileName: string, fileBuffer: Buffer): Promise<NormalizedImportResult> {
+        return FirewireData.buildNormalizedImportResultFromRows(sqldb, vendor, fileName, FirewireData.parsePartsImportRows(fileName, fileBuffer))
+    }
+    private static async buildNormalizedImportResultFromRows(sqldb: SqlDb, vendor: Vendor, fileName: string, parsedRows: string[][]): Promise<NormalizedImportResult> {
         const resolved = await FirewireData.resolveVendorImportConfig(sqldb, vendor)
         if (!resolved.config) {
             throw new Error(`No import configuration exists for vendor ${vendor.name}.`)
         }
         const config = resolved.config
-        const parsedRows = parseCsv(fileBuffer.toString('utf-8'), {
-            bom: true,
-            skip_empty_lines: true
-        }) as string[][]
         const actualHeaders = Array.isArray(parsedRows[0]) ? parsedRows[0].map((value) => String(value || '').trim()) : []
         const bodyRows = parsedRows.slice(1)
-        const missingHeaders = config.expectedHeaders.filter((header) => !actualHeaders.includes(header))
-        const unexpectedHeaders = actualHeaders.filter((header) => !config.expectedHeaders.includes(header))
+        const actualHeaderByNormalized = new Map(actualHeaders.map((header) => [FirewireData.normalizeHeaderName(header), header] as const))
+        const expectedHeaderSet = new Set(config.expectedHeaders.map((header) => FirewireData.normalizeHeaderName(header)))
+        const missingHeaders = config.expectedHeaders.filter((header) => !actualHeaderByNormalized.has(FirewireData.normalizeHeaderName(header)))
+        const unexpectedHeaders = actualHeaders.filter((header) => !expectedHeaderSet.has(FirewireData.normalizeHeaderName(header)))
         const issues: string[] = []
         const sampleErrors: string[] = []
-        const normalizedRows: EddyPricelist[] = []
+        const normalizedRows: Part[] = []
 
-        const lengthLimits: Partial<Record<keyof EddyPricelist, number>> = {
+        const lengthLimits: Partial<Record<keyof Part, number>> = {
             ParentCategory: 500,
+            parentCategory: 500,
             Category: 500,
-            PartNumber: 100,
-            LongDescription: 1000,
+            category: 500,
+            PartNumber: 120,
+            partNumber: 120,
+            LongDescription: 2000,
+            description: 2000,
             ProductStatus: 500,
+            productStatus: 500,
             Agency: 50,
+            agency: 50,
             CountryOfOrigin: 50,
-            UPC: 50
+            countryOfOrigin: 50,
+            UPC: 50,
+            upc: 50
         }
 
         if (missingHeaders.length > 0) {
@@ -2469,7 +2296,7 @@ export class FirewireData {
             actualHeaders.forEach((header, index) => {
                 sourceRow[header] = String(rowValues[index] ?? '').trim()
             })
-            const normalizedRow: EddyPricelist = {
+            const normalizedRow: Part = {
                 ParentCategory: '',
                 Category: '',
                 PartNumber: '',
@@ -2488,9 +2315,12 @@ export class FirewireData {
             }
 
             for (const [sourceHeader, targetColumn] of Object.entries(config.headerMap)) {
-                const rawValue = sourceRow[sourceHeader] ?? ''
+                const actualHeader = actualHeaderByNormalized.get(FirewireData.normalizeHeaderName(sourceHeader)) || sourceHeader
+                const rawValue = sourceRow[actualHeader] ?? ''
                 const type = config.columnTypes[targetColumn] || 'string'
-                const normalizedValue = FirewireData.normalizeImportValue(rawValue, type)
+                const normalizedValue = FirewireData.isPartNumberColumn(targetColumn)
+                    ? FirewireData.normalizePartNumberImportValue(rawValue)
+                    : FirewireData.normalizeImportValue(rawValue, type)
                 ;(normalizedRow as any)[targetColumn] = normalizedValue
 
                 const maxLength = lengthLimits[targetColumn]
@@ -2499,7 +2329,8 @@ export class FirewireData {
                 }
             }
 
-            if (!normalizedRow.PartNumber && sampleErrors.length < 12) {
+            const normalizedPartNumber = FirewireData.getNormalizedRowPartNumber(normalizedRow)
+            if (!normalizedPartNumber && sampleErrors.length < 12) {
                 sampleErrors.push(`Row ${rowIndex + 2}: Part Number is blank.`)
             }
             normalizedRows.push(normalizedRow)
@@ -2526,6 +2357,101 @@ export class FirewireData {
             normalizedRows
         }
     }
+    private static async buildBulkPartsWorkbookResult(sqldb: SqlDb, fileName: string, fileBuffer: Buffer, execute: boolean): Promise<BulkPartsWorkbookResult> {
+        const extension = String(fileName || '').split('.').pop()?.toLowerCase()
+        if (extension !== 'xlsx' && extension !== 'xls') {
+            throw new Error('All Parts import expects an Excel workbook with one vendor per worksheet.')
+        }
+
+        const workbook = XLSX.read(fileBuffer, { cellDates: false, raw: true })
+        const vendors = await sqldb.getVendors()
+        const vendorBySheetName = new Map(vendors.map((vendor) => [FirewireData.normalizeWorkbookVendorName(vendor.name), vendor] as const))
+        const results: BulkPartsWorkbookVendorResult[] = []
+
+        for (const sheetName of workbook.SheetNames) {
+            const sheetRows = FirewireData.parsePartsImportWorksheet(workbook.Sheets[sheetName])
+            if (sheetRows.length <= 0) {
+                continue
+            }
+
+            const vendor = vendorBySheetName.get(FirewireData.normalizeWorkbookVendorName(sheetName))
+            if (!vendor) {
+                results.push({
+                    sheetName,
+                    matched: false,
+                    valid: true,
+                    rowCount: Math.max(sheetRows.length - 1, 0),
+                    issues: [`No vendor named "${sheetName}" exists. Sheet skipped.`],
+                    sampleErrors: []
+                })
+                continue
+            }
+
+            const normalized = await FirewireData.buildNormalizedImportResultFromRows(sqldb, vendor, `${fileName}:${sheetName}`, sheetRows)
+            const vendorResult: BulkPartsWorkbookVendorResult = {
+                sheetName,
+                vendorId: vendor.vendorId,
+                vendorName: vendor.name,
+                matched: true,
+                valid: normalized.preview.valid,
+                rowCount: normalized.preview.rowCount,
+                issues: normalized.preview.issues,
+                sampleErrors: normalized.preview.sampleErrors
+            }
+
+            if (execute && normalized.preview.valid) {
+                const existingRows = await sqldb.getRawPartsByVendor(vendor.vendorId)
+                const snapshotId = await sqldb.createVendorImportSnapshot({
+                    vendorId: vendor.vendorId,
+                    targetTable: normalized.config.targetTable,
+                    fileName: `${fileName}:${sheetName}`,
+                    rowCount: existingRows.length,
+                    summaryJson: JSON.stringify({
+                        action: 'pre-workbook-import-backup',
+                        fileName,
+                        sheetName,
+                        importedRowCount: normalized.preview.rowCount,
+                        createdAt: new Date().toISOString()
+                    }),
+                    rowsJson: JSON.stringify(existingRows),
+                    createdBy: 'system'
+                })
+                await sqldb.replacePartsForVendor(vendor.vendorId, normalized.normalizedRows)
+                const runId = await sqldb.createVendorImportRun({
+                    vendorId: vendor.vendorId,
+                    targetTable: normalized.config.targetTable,
+                    fileName: `${fileName}:${sheetName}`,
+                    snapshotId,
+                    action: 'import',
+                    rowCount: normalized.normalizedRows.length,
+                    createdBy: 'system',
+                    notesJson: JSON.stringify({
+                        workbookFileName: fileName,
+                        sheetName,
+                        preview: normalized.preview
+                    })
+                })
+                vendorResult.snapshotId = snapshotId
+                vendorResult.runId = runId
+                vendorResult.importedRowCount = normalized.normalizedRows.length
+            }
+
+            results.push(vendorResult)
+        }
+
+        const matchedResults = results.filter((row) => row.matched)
+        const invalidMatchedResults = matchedResults.filter((row) => !row.valid)
+        return {
+            fileName,
+            sheetCount: workbook.SheetNames.length,
+            matchedVendorCount: matchedResults.length,
+            skippedSheetCount: results.filter((row) => !row.matched).length,
+            importedVendorCount: execute ? results.filter((row) => row.matched && row.valid && typeof row.importedRowCount === 'number').length : 0,
+            importedRowCount: execute ? results.reduce((sum, row) => sum + Number(row.importedRowCount || 0), 0) : 0,
+            valid: matchedResults.length > 0 && invalidMatchedResults.length <= 0,
+            results
+        }
+    }
     private static normalizeImportValue(rawValue: string, type: 'string' | 'money' | 'int' | 'date'): any {
         const value = String(rawValue || '').trim()
         if (!value) {
@@ -2548,6 +2474,58 @@ export class FirewireData {
             return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10)
         }
         return FirewireData.normalizeImportText(value)
+    }
+    private static normalizeHeaderName(value: string): string {
+        return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+    }
+    private static normalizeWorkbookVendorName(value: string): string {
+        return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+    }
+    private static parsePartsImportRows(fileName: string, fileBuffer: Buffer): string[][] {
+        const extension = String(fileName || '').split('.').pop()?.toLowerCase()
+        if (extension === 'xlsx' || extension === 'xls') {
+            const workbook = XLSX.read(fileBuffer, { cellDates: false, raw: true })
+            const firstSheetName = workbook.SheetNames[0]
+            if (!firstSheetName) {
+                return []
+            }
+            return FirewireData.parsePartsImportWorksheet(workbook.Sheets[firstSheetName])
+        }
+        return parseCsv(fileBuffer.toString('utf-8'), {
+            bom: true,
+            skip_empty_lines: true
+        }) as string[][]
+    }
+    private static parsePartsImportWorksheet(sheet: XLSX.WorkSheet): string[][] {
+        const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+            header: 1,
+            defval: '',
+            raw: true
+        })
+        return rows
+            .map((row) => Array.isArray(row) ? row.map((value) => String(value ?? '').trim()) : [])
+            .filter((row) => row.some((value) => !!String(value || '').trim()))
+    }
+    private static isPartNumberColumn(targetColumn: keyof Part): boolean {
+        return String(targetColumn || '').trim().toLowerCase() === 'partnumber'
+    }
+    private static getNormalizedRowPartNumber(row: Part): string {
+        return String(row.partNumber || row.PartNumber || '').trim()
+    }
+    private static normalizePartNumberImportValue(rawValue: string): string {
+        const value = FirewireData.normalizeImportText(String(rawValue || '').trim())
+        if (!value) {
+            return ''
+        }
+        const currencyMatch = value.match(/^\$?\s*([0-9]{1,3}(?:,[0-9]{3})+)(?:\.0+)?$/)
+        if (currencyMatch) {
+            return currencyMatch[1].replace(/,/g, '')
+        }
+        const plainDecimalMatch = value.match(/^([0-9]+)\.0+$/)
+        if (plainDecimalMatch) {
+            return plainDecimalMatch[1]
+        }
+        return value
     }
     private static normalizeImportText(value: string): string {
         if (!value) {
@@ -2581,6 +2559,8 @@ export class FirewireData {
             return {
                 deviceSetId: row.deviceSetId,
                 name: row.name,
+                visibility: FirewireData.parseDeviceSetVisibility(row.visibilityJson),
+                ownerUserId: row.ownerUserId || null,
                 deviceCount: linkedDevices.length,
                 vendors: vendorNames,
                 createat: row.createat,
@@ -2606,8 +2586,54 @@ export class FirewireData {
         return {
             deviceSetId: deviceSet.deviceSetId,
             name: deviceSet.name,
+            visibility: FirewireData.parseDeviceSetVisibility(deviceSet.visibilityJson),
+            ownerUserId: deviceSet.ownerUserId || null,
             devices: linkedDevices
         }
+    }
+
+    private static parseDeviceSetVisibility(value: unknown): string[] {
+        if (Array.isArray(value)) {
+            return FirewireData.normalizeDeviceSetVisibility(value)
+        }
+        if (typeof value !== 'string' || !value.trim()) {
+            return ['all-users']
+        }
+        try {
+            return FirewireData.normalizeDeviceSetVisibility(JSON.parse(value))
+        } catch {
+            return ['all-users']
+        }
+    }
+
+    private static normalizeDeviceSetVisibility(value: unknown): string[] {
+        const allowed = new Set(['all-users', 'current-user', 'fire-alarm', 'sprinkler', 'security'])
+        const source = Array.isArray(value) ? value : []
+        const normalized = Array.from(new Set(source
+            .map((item) => String(item || '').trim().toLowerCase())
+            .filter((item) => allowed.has(item))))
+        return normalized.length > 0 ? normalized : ['all-users']
+    }
+
+    private static resolveUserId(req: express.Request): string {
+        const tokenOutput = (req as any).bearerTokenOutput || {}
+        const candidates = [
+            tokenOutput.preferred_username,
+            tokenOutput.upn,
+            tokenOutput.email,
+            tokenOutput.unique_name,
+            tokenOutput.name,
+            tokenOutput.oid,
+            tokenOutput.sub
+        ]
+
+        for (const candidate of candidates) {
+            if (typeof candidate === 'string' && candidate.trim().length > 0) {
+                return candidate.trim()
+            }
+        }
+
+        return 'device-sets'
     }
     private static async buildDeviceVendorLinkIssues(sqldb: SqlDb): Promise<DeviceVendorLinkIssue[]> {
         const devices = await sqldb.getVwDevices()
@@ -2615,7 +2641,7 @@ export class FirewireData {
         const ignores = await sqldb.getDeviceVendorLinkIgnores()
         const vendors = await sqldb.getVendors()
         const vendorById = new Map(vendors.map((vendor) => [vendor.vendorId, vendor] as const))
-        const materialsByDeviceId = new Map<string, VwEddyPricelist[] | any[]>()
+        const materialsByDeviceId = new Map<string, VwPart[] | any[]>()
         for (const row of deviceMaterials) {
             const existing = materialsByDeviceId.get(row.deviceId) || []
             existing.push(row)
@@ -2671,29 +2697,21 @@ export class FirewireData {
         return issues
     }
     private static async checkVendorPartExists(sqldb: SqlDb, vendor: Vendor, config: VendorImportConfig, partNumber: string): Promise<boolean> {
-        if (config.targetTable === 'EddyPricelist') {
-            const rows = await sqldb.getVwEddyPricelistByPartNumber(partNumber)
-            return Array.isArray(rows) && rows.length > 0
-        }
-        if (config.targetTable === 'VendorPricelist') {
-            const rows = await sqldb.getVendorPricelistByPartNumber(vendor.vendorId, partNumber)
+        if (config.targetTable === 'parts') {
+            const rows = await sqldb.getPartByVendorAndPartNumber(vendor.vendorId, partNumber)
             return Array.isArray(rows) && rows.length > 0
         }
         return false
     }
-    private static async resolveVendorPartRecord(sqldb: SqlDb, vendor: Vendor, partNumber: string): Promise<VwEddyPricelist | null> {
+    private static async resolveVendorPartRecord(sqldb: SqlDb, vendor: Vendor, partNumber: string): Promise<VwPart | null> {
         const resolved = await FirewireData.resolveVendorImportConfig(sqldb, vendor)
         const config = resolved.config
         if (!config) {
             return null
         }
-        if (config.targetTable === 'EddyPricelist') {
-            const rows = await sqldb.getVwEddyPricelistByPartNumber(partNumber)
-            return Array.isArray(rows) && rows.length > 0 ? rows[0] as VwEddyPricelist : null
-        }
-        if (config.targetTable === 'VendorPricelist') {
-            const rows = await sqldb.getVendorPricelistByPartNumber(vendor.vendorId, partNumber)
-            return Array.isArray(rows) && rows.length > 0 ? rows[0] as VwEddyPricelist : null
+        if (config.targetTable === 'parts') {
+            const rows = await sqldb.getPartByVendorAndPartNumber(vendor.vendorId, partNumber)
+            return Array.isArray(rows) && rows.length > 0 ? rows[0] as VwPart : null
         }
         return null
     }
@@ -2702,34 +2720,17 @@ export class FirewireData {
         sqldb: SqlDb,
         vendor: Vendor,
         partNumber: string,
-        part: VwEddyPricelist,
+        part: VwPart,
         body: any
     ): Promise<{ device: any, material: any, createdMaterial: boolean }> {
         const name = String(body?.name || '').trim()
         const shortName = String(body?.shortName || '').trim()
-        const categoryId = String(body?.categoryId || '').trim()
-        const categoryName = String(body?.categoryName || '').trim()
+        const categoryName = String(body?.categoryName || part?.Category || '').trim()
+        const includeOnFloorplan = typeof body?.includeOnFloorplan === 'undefined' ? !!categoryName : !!body.includeOnFloorplan
 
-        if (!partNumber || !name || !shortName || !categoryId) {
-            const error: any = new Error('partNumber, name, shortName, and categoryId are required.')
+        if (!partNumber || !name || !shortName) {
+            const error: any = new Error('partNumber, name, and shortName are required.')
             error.status = 400
-            throw error
-        }
-
-        await FirewireData.ensureCategoriesExistForVendorPartNumbers(sqldb, vendor, [partNumber])
-        if (categoryName) {
-            await FirewireData.ensureCategoryExistsByName(sqldb, categoryName, 'device-category-sync')
-        }
-
-        const categories = await sqldb.getCategories()
-        const normalizedCategoryName = FirewireData.normalizeCategoryName(categoryName)
-        const category = categories.find((row) =>
-            row.categoryId === categoryId
-            || (!!normalizedCategoryName && FirewireData.normalizeCategoryName(row.name) === normalizedCategoryName)
-        )
-        if (!category) {
-            const error: any = new Error(`Category ${categoryName || categoryId} not found.`)
-            error.status = 404
             throw error
         }
 
@@ -2743,11 +2744,9 @@ export class FirewireData {
 
         const safeDeviceName = FirewireData.getSafeDeviceName(name, partNumber)
         const safeShortName = FirewireData.limitText(shortName || partNumber, 50) || partNumber
-        const safeMaterialName = FirewireData.getSafeDeviceName(name || String(part?.LongDescription || ''), partNumber)
-        const categoryDefaultLabor = typeof category.defaultLabor === 'number' ? Number(category.defaultLabor) : 112
-        const categorySlcAddress = String(category.slcAddress || '').trim()
-        const categorySpeakerAddress = String(category.speakerAddress || '').trim()
-        const categoryStrobeAddress = String(category.strobeAddress || '').trim()
+        const safeMaterialName = String(part?.LongDescription || '').trim() || partNumber
+        const safeMaterialCategoryName = String(part?.Category || part?.ParentCategory || categoryName || '').trim()
+        const defaultLabor = Number(body?.defaultLabor ?? 112)
 
         let material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
         let createdMaterial = false
@@ -2755,17 +2754,18 @@ export class FirewireData {
             await sqldb.createMaterial({
                 materialId: '',
                 name: safeMaterialName,
-                shortName: safeShortName,
+                shortName: partNumber,
                 vendorId: vendor.vendorId,
-                categoryId: category.categoryId,
+                categoryName: safeMaterialCategoryName,
                 partNumber,
                 link: '',
+                msrp: Number(part.MSRPPrice || 0),
                 cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                defaultLabor: categoryDefaultLabor,
-                slcAddress: categorySlcAddress,
+                defaultLabor,
+                slcAddress: '',
                 serialNumber: '',
-                strobeAddress: categoryStrobeAddress,
-                speakerAddress: categorySpeakerAddress
+                strobeAddress: '',
+                speakerAddress: ''
             })
             material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
             createdMaterial = true
@@ -2776,15 +2776,16 @@ export class FirewireData {
             name: safeDeviceName,
             shortName: safeShortName,
             vendorId: vendor.vendorId,
-            categoryId: category.categoryId,
+            categoryName,
+            includeOnFloorplan,
             partNumber,
             link: '',
             cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-            defaultLabor: categoryDefaultLabor,
-            slcAddress: categorySlcAddress,
+            defaultLabor,
+            slcAddress: '',
             serialNumber: '',
-            strobeAddress: categoryStrobeAddress,
-            speakerAddress: categorySpeakerAddress
+            strobeAddress: '',
+            speakerAddress: ''
         })
 
         const device = await sqldb.getDeviceByVendorAndPartNumber(vendor.vendorId, partNumber)
@@ -2806,7 +2807,7 @@ export class FirewireData {
         sqldb: SqlDb,
         vendor: Vendor,
         partNumber: string,
-        part: VwEddyPricelist,
+        part: VwPart,
         deviceId: string
     ): Promise<{ device: any, material: any, createdMaterial: boolean, createdMap: boolean }> {
         if (!partNumber || !deviceId) {
@@ -2830,9 +2831,10 @@ export class FirewireData {
                 name: part.LongDescription || device.name,
                 shortName: partNumber,
                 vendorId: vendor.vendorId,
-                categoryId: device.categoryId,
+                categoryName: String(part.Category || part.ParentCategory || device.categoryName || '').trim(),
                 partNumber,
                 link: '',
+                msrp: Number(part.MSRPPrice || 0),
                 cost: Number(part.SalesPrice || part.MSRPPrice || 0),
                 defaultLabor: Number(device.defaultLabor || 112),
                 slcAddress: '',
@@ -2857,131 +2859,6 @@ export class FirewireData {
         return { device, material, createdMaterial, createdMap: true }
     }
 
-    private static async reconcileCategoriesFromDeviceParts(sqldb: SqlDb): Promise<{ rows: CategoryReconcileRow[], summary: { createdCount: number, referencedCategoryCount: number, unreferencedCategoryCount: number } }> {
-        const [categories, devices] = await Promise.all([
-            sqldb.getCategories(),
-            sqldb.getVwDevices()
-        ])
-
-        const referencedCategoryCounts = new Map<string, number>()
-        const referencedCategorySources = new Map<string, Set<string>>()
-        const referencedCategoryDisplayNames = new Map<string, string>()
-
-        for (const device of devices) {
-            const categoryName = String(device.categoryName || '').trim()
-            if (!categoryName) {
-                continue
-            }
-            const normalizedCategory = FirewireData.normalizeCategoryName(categoryName)
-            referencedCategoryCounts.set(normalizedCategory, (referencedCategoryCounts.get(normalizedCategory) || 0) + 1)
-            if (!referencedCategoryDisplayNames.has(normalizedCategory)) {
-                referencedCategoryDisplayNames.set(normalizedCategory, categoryName)
-            }
-            const sourceVendors = referencedCategorySources.get(normalizedCategory) || new Set<string>()
-            sourceVendors.add(String(device.vendorName || '').trim())
-            referencedCategorySources.set(normalizedCategory, sourceVendors)
-        }
-
-        const categoriesByNormalizedName = new Map(categories.map((category) => [FirewireData.normalizeCategoryName(category.name), category]))
-        const existingHandles = new Set(categories.map((category) => String(category.handle || '').trim().toLowerCase()).filter(Boolean))
-        const createdCategoryNames = new Set<string>()
-
-        for (const normalizedCategory of referencedCategoryCounts.keys()) {
-            if (categoriesByNormalizedName.has(normalizedCategory)) {
-                continue
-            }
-            const displayName = referencedCategoryDisplayNames.get(normalizedCategory) || FirewireData.restoreCategoryDisplayName(normalizedCategory)
-            await FirewireData.createCategoryIfMissing(sqldb, displayName, categoriesByNormalizedName, existingHandles, 'category-reconcile')
-            createdCategoryNames.add(normalizedCategory)
-        }
-
-        const refreshedCategories = await sqldb.getCategories()
-        const rows: CategoryReconcileRow[] = refreshedCategories.map((category) => {
-            const normalizedCategory = FirewireData.normalizeCategoryName(category.name)
-            return {
-                ...category,
-                referencedByDeviceParts: referencedCategoryCounts.has(normalizedCategory),
-                devicePartReferenceCount: referencedCategoryCounts.get(normalizedCategory) || 0,
-                sourceVendors: [...(referencedCategorySources.get(normalizedCategory) || new Set<string>())],
-                createdByReconcile: createdCategoryNames.has(normalizedCategory)
-            }
-        })
-
-        return {
-            rows,
-            summary: {
-                createdCount: createdCategoryNames.size,
-                referencedCategoryCount: rows.filter((row) => row.referencedByDeviceParts).length,
-                unreferencedCategoryCount: rows.filter((row) => !row.referencedByDeviceParts).length
-            }
-        }
-    }
-
-    private static async ensureCategoriesExistForVendorPartNumbers(sqldb: SqlDb, vendor: Vendor, partNumbers: string[]): Promise<void> {
-        const uniquePartNumbers = Array.from(new Set(partNumbers.map((value) => String(value || '').trim()).filter(Boolean)))
-        if (uniquePartNumbers.length <= 0) {
-            return
-        }
-
-        const categories = await sqldb.getCategories()
-        const categoriesByNormalizedName = new Map(categories.map((category) => [FirewireData.normalizeCategoryName(category.name), category]))
-        const existingHandles = new Set(categories.map((category) => String(category.handle || '').trim().toLowerCase()).filter(Boolean))
-
-        for (const partNumber of uniquePartNumbers) {
-            const partRecord = await FirewireData.resolveVendorPartRecord(sqldb, vendor, partNumber)
-            const categoryName = String(partRecord?.Category || '').trim()
-            if (!categoryName) {
-                continue
-            }
-            await FirewireData.createCategoryIfMissing(sqldb, categoryName, categoriesByNormalizedName, existingHandles, 'device-category-sync')
-        }
-    }
-
-    private static async ensureCategoryExistsByName(sqldb: SqlDb, categoryName: string, createdBy: string): Promise<void> {
-        const normalizedCategory = FirewireData.normalizeCategoryName(categoryName)
-        if (!normalizedCategory) {
-            return
-        }
-        const categories = await sqldb.getCategories()
-        const categoriesByNormalizedName = new Map(categories.map((category) => [FirewireData.normalizeCategoryName(category.name), category]))
-        const existingHandles = new Set(categories.map((category) => String(category.handle || '').trim().toLowerCase()).filter(Boolean))
-        await FirewireData.createCategoryIfMissing(sqldb, categoryName, categoriesByNormalizedName, existingHandles, createdBy)
-    }
-
-    private static async createCategoryIfMissing(
-        sqldb: SqlDb,
-        displayName: string,
-        categoriesByNormalizedName: Map<string, any>,
-        existingHandles: Set<string>,
-        createdBy: string
-    ): Promise<void> {
-        const normalizedCategory = FirewireData.normalizeCategoryName(displayName)
-        if (!normalizedCategory || categoriesByNormalizedName.has(normalizedCategory)) {
-            return
-        }
-        const resolvedDisplayName = String(displayName || '').trim() || FirewireData.restoreCategoryDisplayName(normalizedCategory)
-        const handle = FirewireData.buildUniqueCategoryHandle(resolvedDisplayName, existingHandles)
-        await sqldb.createCategory({
-            categoryId: '',
-            name: resolvedDisplayName,
-            shortName: resolvedDisplayName,
-            handle,
-            createby: createdBy,
-            updateby: createdBy
-        })
-        existingHandles.add(handle.toLowerCase())
-        categoriesByNormalizedName.set(normalizedCategory, {
-            categoryId: '',
-            name: resolvedDisplayName,
-            shortName: resolvedDisplayName,
-            handle
-        })
-    }
-
-    private static normalizeCategoryName(value: string): string {
-        return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
-    }
-
     private static limitText(value: string, maxLength: number): string {
         return String(value || '').trim().slice(0, Math.max(0, maxLength))
     }
@@ -2993,33 +2870,6 @@ export class FirewireData {
             return FirewireData.limitText(trimmedPartNumber, 100)
         }
         return FirewireData.limitText(trimmedName, 100)
-    }
-
-    private static restoreCategoryDisplayName(normalizedValue: string): string {
-        return String(normalizedValue || '')
-            .split(' ')
-            .filter(Boolean)
-            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-            .join(' ')
-    }
-
-    private static buildUniqueCategoryHandle(name: string, existingHandles: Set<string>): string {
-        const maxLength = 10
-        const rawBaseHandle = String(name || '')
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, '') || 'CATEGORY'
-        const baseHandle = rawBaseHandle.slice(0, maxLength) || 'CATEGORY'.slice(0, maxLength)
-        let nextHandle = baseHandle
-        let suffix = 2
-        while (existingHandles.has(nextHandle.toLowerCase())) {
-            const suffixText = String(suffix)
-            const allowedBaseLength = Math.max(1, maxLength - suffixText.length)
-            const truncatedBase = baseHandle.slice(0, allowedBaseLength) || baseHandle.slice(0, allowedBaseLength)
-            nextHandle = `${truncatedBase}${suffixText}`.slice(0, maxLength)
-            suffix += 1
-        }
-        return nextHandle
     }
 
     private static async loadStoredWorkspace(sqldb: SqlDb, area: string, workspaceKey: string, defaultPayload: any): Promise<StoredWorkspaceResponse> {
@@ -3044,6 +2894,26 @@ export class FirewireData {
                 updatedAt: record.updateat
             }
         }
+    }
+
+    private static async deleteDeviceMediaWorkspace(sqldb: SqlDb, deviceId: string): Promise<string[]> {
+        const workspace = await FirewireData.loadStoredWorkspace(sqldb, 'device-media', deviceId, { files: [] })
+        const files = Array.isArray(workspace.payload?.files) ? workspace.payload.files : []
+        const deletedBlobs: string[] = []
+        if (files.length > 0) {
+            const storage = new AzureBlobDocumentStorage()
+            for (const file of files) {
+                if (!file?.blobName) {
+                    continue
+                }
+                const deleted = await storage.deleteIfExists(file.blobContainerName || deviceId, file.blobName)
+                if (deleted) {
+                    deletedBlobs.push(file.blobName)
+                }
+            }
+        }
+        await sqldb.deleteWorkspaceStorage('device-media', deviceId)
+        return deletedBlobs
     }
 
     private static resolveUploadField(value: unknown): string {

@@ -2,7 +2,8 @@ CREATE TABLE [dbo].[devices](
 	[deviceId] [nvarchar](40) NOT NULL,
 	[name] [nvarchar](100) NOT NULL,
 	[shortName] [nvarchar](50) NOT NULL,
-	[categoryId] [nvarchar](40) NOT NULL,
+	[categoryName] [nvarchar](500) NULL,
+	[includeOnFloorplan] [bit] NOT NULL,
 	[vendorId] [nvarchar](40) NOT NULL,
 	[partNumber] [nvarchar](40) NOT NULL,
 	[link] [nvarchar](1024) NOT NULL,
@@ -41,4 +42,7 @@ ALTER TABLE [dbo].[devices] ADD  DEFAULT ('system') FOR [updateby]
 GO
 
 ALTER TABLE [dbo].[devices] ADD  DEFAULT ((56)) FOR [laborRate]
+GO
+
+ALTER TABLE [dbo].[devices] ADD  DEFAULT ((0)) FOR [includeOnFloorplan]
 GO

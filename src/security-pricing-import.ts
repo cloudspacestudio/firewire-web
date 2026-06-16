@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import { Bootstrap } from './core/bootstrap'
 import { SqlDb } from './workspaces/fieldwire/repository/sqldb'
 import { Vendor } from './workspaces/fieldwire/repository/vendor'
-import { VendorPricelist } from './workspaces/fieldwire/repository/vendorPricelist'
+import { Part } from './workspaces/fieldwire/repository/part'
 
 const WORKBOOK_HEADERS = [
     'BRAND',
@@ -22,7 +22,7 @@ async function main() {
     const workbookPath = path.resolve(process.cwd(), process.argv[2] || '../resources/security-pricing.xlsx')
     const app = await new Bootstrap().start(true)
     const sqldb = new SqlDb(app)
-    await sqldb.ensureVendorPricelistSchema()
+    await sqldb.ensurePartsSchema()
 
     const workbook = XLSX.readFile(workbookPath, { cellDates: false, raw: false })
     let totalRows = 0
@@ -32,10 +32,6 @@ async function main() {
         if (sheetName.startsWith('~')) {
             continue
         }
-        if (isExcludedWorksheet(sheetName)) {
-            summaries.push(`${sheetName}: skipped, Edwards parts continue to use the existing EddyPricelist import path.`)
-            continue
-        }
         const sheet = workbook.Sheets[sheetName]
         const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
             defval: '',
@@ -43,7 +39,7 @@ async function main() {
         })
         const normalizedRows = rows
             .map((row) => normalizeWorkbookRow(sheetName, row))
-            .filter((row): row is VendorPricelist => !!row)
+            .filter((row): row is Part => !!row)
 
         if (normalizedRows.length <= 0) {
             summaries.push(`${sheetName}: skipped, no part rows found.`)
@@ -51,10 +47,10 @@ async function main() {
         }
 
         const vendor = await upsertWorkbookVendor(sqldb, sheetName)
-        const existingRows = await sqldb.getRawVendorPricelist(vendor.vendorId)
+        const existingRows = await sqldb.getRawPartsByVendor(vendor.vendorId)
         const snapshotId = await sqldb.createVendorImportSnapshot({
             vendorId: vendor.vendorId,
-            targetTable: 'VendorPricelist',
+            targetTable: 'parts',
             fileName: path.basename(workbookPath),
             rowCount: existingRows.length,
             summaryJson: JSON.stringify({
@@ -67,10 +63,10 @@ async function main() {
             createdBy: 'security-pricing-import'
         })
 
-        await sqldb.replaceVendorPricelist(vendor.vendorId, normalizedRows)
+        await sqldb.replacePartsForVendor(vendor.vendorId, normalizedRows)
         await sqldb.createVendorImportRun({
             vendorId: vendor.vendorId,
-            targetTable: 'VendorPricelist',
+            targetTable: 'parts',
             fileName: path.basename(workbookPath),
             snapshotId,
             action: 'import',
@@ -98,35 +94,36 @@ async function upsertWorkbookVendor(sqldb: SqlDb, sheetName: string): Promise<Ve
     const importConfigJson = JSON.stringify({
         partsVendorKey,
         sourceLabel: `Security pricing workbook worksheet "${name}"`,
-        targetTable: 'VendorPricelist',
+        targetTable: 'parts',
         filePattern: 'security-pricing.xlsx',
         sourceWorksheet: name,
         expectedHeaders: WORKBOOK_HEADERS,
         headerMap: {
-            BRAND: 'ParentCategory',
-            CATEGORY: 'Category',
-            'PRODUCT/SERVICE PART NUMBER': 'PartNumber',
-            'PRODUCT DESCRIPTION': 'LongDescription',
-            'MSRP (USD)': 'MSRPPrice',
-            'DIR CUSTOMER PRICE': 'SalesPrice'
+            BRAND: 'parentCategory',
+            CATEGORY: 'category',
+            'PRODUCT/SERVICE PART NUMBER': 'partNumber',
+            'PRODUCT DESCRIPTION': 'description',
+            'MSRP (USD)': 'msrp',
+            'DIR CUSTOMER PRICE': 'cost'
         },
         columnTypes: {
-            ParentCategory: 'string',
-            Category: 'string',
-            PartNumber: 'string',
-            LongDescription: 'string',
-            MSRPPrice: 'money',
-            SalesPrice: 'money'
+            parentCategory: 'string',
+            category: 'string',
+            partNumber: 'string',
+            description: 'string',
+            msrp: 'money',
+            cost: 'money'
         },
         normalizationSteps: [
             'Each worksheet is treated as one vendor.',
-            'Rows are loaded into VendorPricelist while preserving the original source row JSON.',
-            'DIR CUSTOMER PRICE maps to SalesPrice for downstream device/material creation.',
-            'BRAND maps to ParentCategory and CATEGORY maps to Category to match the existing parts grid.'
+            'Rows are loaded into parts while preserving the original source row JSON.',
+            'DIR CUSTOMER PRICE maps to cost for downstream device/material creation.',
+            'MSRP maps to msrp for customer-facing retail pricing.',
+            'BRAND maps to parentCategory and CATEGORY maps to category.'
         ],
         analysisSummary: [
             'Imported from resources/security-pricing.xlsx.',
-            'VendorPricelist uses the Eddy-compatible column names needed by the existing Parts workflow.'
+            'parts is the canonical master parts repository.'
         ],
         replaceMode: 'truncate-and-load',
         snapshotTable: 'vendorImportSnapshots'
@@ -160,8 +157,8 @@ async function upsertWorkbookVendor(sqldb: SqlDb, sheetName: string): Promise<Ve
     return created
 }
 
-function normalizeWorkbookRow(sheetName: string, row: Record<string, unknown>): VendorPricelist | null {
-    const partNumber = readText(row, 'PRODUCT/SERVICE PART NUMBER')
+function normalizeWorkbookRow(sheetName: string, row: Record<string, unknown>): Part | null {
+    const partNumber = readPartNumber(row, 'PRODUCT/SERVICE PART NUMBER')
     if (!partNumber) {
         return null
     }
@@ -176,27 +173,45 @@ function normalizeWorkbookRow(sheetName: string, row: Record<string, unknown>): 
         vendorId: '',
         sourceVendorName: sheetName,
         brand,
-        ParentCategory: brand,
-        Category: category,
-        PartNumber: limitText(partNumber, 120),
-        LongDescription: limitText(description || serviceDescription || partNumber, 1000),
-        ServiceDescription: limitText(serviceDescription, 1000),
-        ManufacturerOrReseller: limitText(manufacturerOrReseller, 500),
-        MSRPPrice: readMoney(row, 'MSRP (USD)'),
-        DiscountPercent: readPercent(row, 'DISCOUNT % OFF MSRP'),
-        DirAdminFee: readMoney(row, 'DIR ADMIN FEE'),
-        SalesPrice: readMoney(row, 'DIR CUSTOMER PRICE'),
-        MinOrderQuantity: null,
-        ProductStatus: '',
-        Agency: '',
-        CountryOfOrigin: '',
-        UPC: '',
-        RawJson: JSON.stringify(row)
+        parentCategory: brand,
+        category,
+        partNumber: limitText(partNumber, 120),
+        description: limitText(description || serviceDescription || partNumber, 2000),
+        msrp: readMoney(row, 'MSRP (USD)'),
+        cost: readMoney(row, 'DIR CUSTOMER PRICE'),
+        minQty: null,
+        productStatus: '',
+        agency: '',
+        countryOfOrigin: '',
+        upc: '',
+        rawJson: JSON.stringify({
+            ...row,
+            serviceDescription: limitText(serviceDescription, 2000),
+            manufacturerOrReseller: limitText(manufacturerOrReseller, 500),
+            discountPercent: readPercent(row, 'DISCOUNT % OFF MSRP'),
+            dirAdminFee: readMoney(row, 'DIR ADMIN FEE')
+        })
     }
 }
 
 function readText(row: Record<string, unknown>, key: string): string {
     return String(row[key] ?? '').trim()
+}
+
+function readPartNumber(row: Record<string, unknown>, key: string): string {
+    const value = readText(row, key)
+    if (!value) {
+        return ''
+    }
+    const currencyMatch = value.match(/^\$?\s*([0-9]{1,3}(?:,[0-9]{3})+)(?:\.0+)?$/)
+    if (currencyMatch) {
+        return currencyMatch[1].replace(/,/g, '')
+    }
+    const plainDecimalMatch = value.match(/^([0-9]+)\.0+$/)
+    if (plainDecimalMatch) {
+        return plainDecimalMatch[1]
+    }
+    return value
 }
 
 function readMoney(row: Record<string, unknown>, key: string): number {
@@ -226,11 +241,6 @@ function slugify(value: string): string {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-+|-+$/g, '') || 'security-vendor'
-}
-
-function isExcludedWorksheet(sheetName: string): boolean {
-    const normalized = sheetName.trim().toLowerCase()
-    return normalized === 'edwards'
 }
 
 main().catch((err) => {

@@ -20,7 +20,7 @@ const taskname_resolver_1 = require("./tasks/resolvers/taskname.resolver");
 const position_resolver_1 = require("./tasks/resolvers/position.resolver");
 const subtask_resolver_1 = require("./tasks/resolvers/subtask.resolver");
 const apiKey = process.env.fieldwire;
-const defaultMaterialLabor = 2;
+const defaultMaterialLabor = 112;
 class FieldwireSDK {
     constructor() {
         this._jwtToken = null;
@@ -83,7 +83,8 @@ class FieldwireSDK {
                         headers: headers
                     });
                     if (response.status >= 300) {
-                        return reject(new Error(`${response.status}: ${response.statusText}`));
+                        const errorText = yield response.text().catch(() => '');
+                        return reject(new Error(`${response.status}: ${response.statusText}${errorText ? ` - ${errorText}` : ''}`));
                     }
                     const result = yield response.json();
                     return resolve(result);
@@ -124,6 +125,49 @@ class FieldwireSDK {
                             return resolve(result);
                         }
                         catch (parseErr) {
+                            const justParseText = response.bodyUsed ? 'OK' : yield response.text();
+                            return resolve(justParseText);
+                        }
+                    }
+                    const resultText = yield response.text();
+                    return resolve(resultText);
+                }
+                catch (err) {
+                    return reject(err);
+                }
+            }));
+        });
+    }
+    patch(path, body, additionalHeaders) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    if (!this._jwtToken) {
+                        yield this._getJwtToken();
+                    }
+                    if (!body) {
+                        body = {};
+                    }
+                    const url = `${this._regionUrl}${path}`;
+                    const headers = this._buildHeaders(additionalHeaders);
+                    console.log(`PATCH: ${url}`);
+                    console.log(`BODY: ${JSON.stringify(body, null, 1)}`);
+                    const response = yield fetch(url, {
+                        method: 'PATCH',
+                        body: JSON.stringify(body),
+                        headers: headers
+                    });
+                    if (response.status >= 300) {
+                        const errorText = yield response.text().catch(() => '');
+                        return reject(new Error(`${response.status}: ${response.statusText}${errorText ? ` - ${errorText}` : ''}`));
+                    }
+                    const contentType = response.headers.get('Content-Type') || '';
+                    if (contentType.includes('application/json')) {
+                        try {
+                            const result = yield response.json();
+                            return resolve(result);
+                        }
+                        catch (_a) {
                             const justParseText = response.bodyUsed ? 'OK' : yield response.text();
                             return resolve(justParseText);
                         }
@@ -226,6 +270,33 @@ class FieldwireSDK {
             }));
         });
     }
+    allowEditableProject(projectId) {
+        const normalizedProjectId = String(projectId || '').trim();
+        if (normalizedProjectId && FieldwireSDK.editableProjects.indexOf(normalizedProjectId) < 0) {
+            FieldwireSDK.editableProjects.push(normalizedProjectId);
+        }
+    }
+    createProject(input) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    const project = (input === null || input === void 0 ? void 0 : input.project) ? input.project : input;
+                    const result = yield this.post(`projects`, {
+                        project: {
+                            name: project === null || project === void 0 ? void 0 : project.name,
+                            code: project === null || project === void 0 ? void 0 : project.code,
+                            address: project === null || project === void 0 ? void 0 : project.address,
+                            time_zone: (project === null || project === void 0 ? void 0 : project.time_zone) || 'America/Chicago'
+                        }
+                    });
+                    return resolve(result);
+                }
+                catch (err) {
+                    return reject(err);
+                }
+            }));
+        });
+    }
     projectFloorplans(projectId, includeCurrentSheet) {
         return __awaiter(this, void 0, void 0, function* () {
             return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
@@ -320,7 +391,8 @@ class FieldwireSDK {
             return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
                 try {
                     const result = yield this.get(`projects/${projectId}/teams`, {
-                        "Fieldwire-Filter": "active"
+                        "Fieldwire-Filter": "active",
+                        "Fieldwire-Per-Page": 1000
                     });
                     return resolve(result);
                 }
@@ -349,6 +421,54 @@ class FieldwireSDK {
                         // update database record to match fieldwire handle
                         // TODO: UPDATE categories SET handle=result.handle WHERE categoryId='result.id'
                     }
+                    return resolve(result);
+                }
+                catch (err) {
+                    return reject(err);
+                }
+            }));
+        });
+    }
+    createSheetUpload(projectId, input) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                        throw new Error(`Attempted to edit a non-editable project: ${projectId}`);
+                    }
+                    const result = yield this.post(`projects/${projectId}/sheet_uploads`, input, {});
+                    return resolve(result);
+                }
+                catch (err) {
+                    return reject(err);
+                }
+            }));
+        });
+    }
+    projectSheetUploads(projectId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    const result = yield this.get(`projects/${projectId}/sheet_uploads`, {
+                        "Fieldwire-Filter": "active",
+                        "Fieldwire-Per-Page": 1000
+                    });
+                    return resolve(result);
+                }
+                catch (err) {
+                    return reject(err);
+                }
+            }));
+        });
+    }
+    updateFloorplan(projectId, floorplanId, input) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                try {
+                    if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+                        throw new Error(`Attempted to edit a non-editable project: ${projectId}`);
+                    }
+                    const result = yield this.patch(`projects/${projectId}/floorplans/${floorplanId}`, input, {});
                     return resolve(result);
                 }
                 catch (err) {
@@ -952,6 +1072,7 @@ class FieldwireSDK {
     seedFromTestDevices(app) {
         return __awaiter(this, void 0, void 0, function* () {
             return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
+                var _a, _b, _c, _d, _e, _f, _g, _h;
                 try {
                     const sqldb = new sqldb_1.SqlDb(app);
                     const testDevices = yield sqldb.getTestDevices();
@@ -960,8 +1081,7 @@ class FieldwireSDK {
                     const vendors = yield sqldb.getVendors();
                     const materials = yield sqldb.getMaterials();
                     const deviceMaterials = yield sqldb.getDeviceMaterials();
-                    const eddyProducts = yield sqldb.getEddyProducts();
-                    const eddyPricelist = yield sqldb.getEddyPricelist();
+                    const parts = yield sqldb.getParts();
                     if (!testDevices || testDevices.length <= 0) {
                         return resolve(false);
                     }
@@ -977,9 +1097,8 @@ class FieldwireSDK {
                         }
                         const testVendor = vendors.find(s => s.name === testDevice.vendorId);
                         if (testCategory && testVendor) {
-                            // if this is edwards we have product details
-                            const testPricelist = eddyPricelist.find(s => s.PartNumber === testDevice.partNumber);
-                            const testProduct = eddyProducts.find(s => s.PartNumber === testDevice.partNumber);
+                            const testPart = parts.find((s) => s.vendorId === testVendor.vendorId &&
+                                String(s.partNumber || s.PartNumber || '').trim().toLowerCase() === String(testDevice.partNumber || '').trim().toLowerCase());
                             // Look if we have the material
                             let testMaterial = materials.find(s => s.vendorId === testVendor.vendorId && s.partNumber === testDevice.partNumber);
                             if (!testMaterial) {
@@ -991,8 +1110,8 @@ class FieldwireSDK {
                                     vendorId: testVendor === null || testVendor === void 0 ? void 0 : testVendor.vendorId,
                                     categoryId: testCategory === null || testCategory === void 0 ? void 0 : testCategory.categoryId,
                                     partNumber: testDevice.partNumber,
-                                    link: testProduct ? testProduct.ProductID : '',
-                                    cost: testPricelist ? testPricelist.SalesPrice : (testProduct ? testProduct.SalesPrice : 0),
+                                    link: (testPart === null || testPart === void 0 ? void 0 : testPart.partId) || (testPart === null || testPart === void 0 ? void 0 : testPart.ProductID) || '',
+                                    cost: Number((_d = (_c = (_b = (_a = testPart === null || testPart === void 0 ? void 0 : testPart.cost) !== null && _a !== void 0 ? _a : testPart === null || testPart === void 0 ? void 0 : testPart.SalesPrice) !== null && _b !== void 0 ? _b : testPart === null || testPart === void 0 ? void 0 : testPart.msrp) !== null && _c !== void 0 ? _c : testPart === null || testPart === void 0 ? void 0 : testPart.MSRPPrice) !== null && _d !== void 0 ? _d : 0),
                                     defaultLabor: defaultMaterialLabor,
                                     slcAddress: testDevice.slcAddress,
                                     serialNumber: testDevice.serialNumber,
@@ -1014,8 +1133,8 @@ class FieldwireSDK {
                                         vendorId: testVendor === null || testVendor === void 0 ? void 0 : testVendor.vendorId,
                                         categoryId: testCategory === null || testCategory === void 0 ? void 0 : testCategory.categoryId,
                                         partNumber: testDevice.partNumber,
-                                        link: testProduct ? testProduct.ProductID : '',
-                                        cost: testPricelist ? testPricelist.SalesPrice : (testProduct ? testProduct.SalesPrice : 0),
+                                        link: (testPart === null || testPart === void 0 ? void 0 : testPart.partId) || (testPart === null || testPart === void 0 ? void 0 : testPart.ProductID) || '',
+                                        cost: Number((_h = (_g = (_f = (_e = testPart === null || testPart === void 0 ? void 0 : testPart.cost) !== null && _e !== void 0 ? _e : testPart === null || testPart === void 0 ? void 0 : testPart.SalesPrice) !== null && _f !== void 0 ? _f : testPart === null || testPart === void 0 ? void 0 : testPart.msrp) !== null && _g !== void 0 ? _g : testPart === null || testPart === void 0 ? void 0 : testPart.MSRPPrice) !== null && _h !== void 0 ? _h : 0),
                                         defaultLabor: defaultMaterialLabor,
                                         slcAddress: testDevice.slcAddress,
                                         serialNumber: testDevice.serialNumber,

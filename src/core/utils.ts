@@ -2,6 +2,7 @@ import { promises as fs } from 'fs'
 import * as path from 'path'
 import fssync from 'fs';
 import { parse } from 'csv-parse';
+import { createRequire } from 'node:module'
 import { v4 as uuidv4 } from 'uuid'
 
 export class Utils {
@@ -85,8 +86,8 @@ export class Utils {
     ): Promise<any> {
         return new Promise(async(resolve, reject) => {
             try {
-                // Dynamically import the module
-                const module = await import(filePath)
+                const requireFromManifest = createRequire(filePath)
+                const module = requireFromManifest(filePath)
     
                 if (!module.default) {
                     throw new Error(`Default module not found in '${filePath}'.`)

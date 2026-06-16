@@ -2,8 +2,8 @@ export interface VwDevice {
     deviceId: string
     name: string
     shortName: string
-    categoryId: string
     categoryName: string
+    includeOnFloorplan: boolean
     vendorId: string
     vendorName: string
     partNumber: string

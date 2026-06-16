@@ -45,6 +45,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.FirewireProjectRepository = void 0;
 const mssql = __importStar(require("mssql"));
 const uuid_1 = require("uuid");
+const FIREWIRE_PROJECT_TYPES = ['Fire Alarm', 'Sprinkler', 'Security'];
+const DEFAULT_FIREWIRE_PROJECT_TYPE = 'Fire Alarm';
+const DEFAULT_GEOCODE_STATUS = 'Not Configured';
 class FirewireProjectRepository {
     constructor(app) {
         this.app = app;
@@ -118,8 +121,13 @@ class FirewireProjectRepository {
                 '    name,',
                 '    projectNbr,',
                 '    address,',
+                '    latitude,',
+                '    longitude,',
+                '    geocodeStatus,',
+                '    geocodedAt,',
                 '    bidDueDate,',
                 '    projectStatus,',
+                '    projectType,',
                 '    salesman,',
                 '    jobType,',
                 '    scopeType,',
@@ -154,8 +162,13 @@ class FirewireProjectRepository {
                 '    name,',
                 '    projectNbr,',
                 '    address,',
+                '    latitude,',
+                '    longitude,',
+                '    geocodeStatus,',
+                '    geocodedAt,',
                 '    bidDueDate,',
                 '    projectStatus,',
+                '    projectType,',
                 '    salesman,',
                 '    jobType,',
                 '    scopeType,',
@@ -187,6 +200,8 @@ class FirewireProjectRepository {
             const normalized = this.normalizeInput(input);
             const projectId = (0, uuid_1.v4)();
             const bidDueDate = normalized.bidDueDate || this.defaultBidDueDateIso();
+            const geocode = yield this.resolveProjectGeocode(normalized.address);
+            const resolvedAddress = geocode.address || normalized.address;
             const pool = yield this.getPool();
             const query = [
                 'INSERT INTO dbo.firewireProjects (',
@@ -195,8 +210,13 @@ class FirewireProjectRepository {
                 '    name,',
                 '    projectNbr,',
                 '    address,',
+                '    latitude,',
+                '    longitude,',
+                '    geocodeStatus,',
+                '    geocodedAt,',
                 '    bidDueDate,',
                 '    projectStatus,',
+                '    projectType,',
                 '    salesman,',
                 '    jobType,',
                 '    scopeType,',
@@ -212,8 +232,13 @@ class FirewireProjectRepository {
                 '    @name,',
                 '    @projectNbr,',
                 '    @address,',
+                '    @latitude,',
+                '    @longitude,',
+                '    @geocodeStatus,',
+                '    @geocodedAt,',
                 '    @bidDueDate,',
                 '    @projectStatus,',
+                '    @projectType,',
                 '    @salesman,',
                 '    @jobType,',
                 '    @scopeType,',
@@ -229,9 +254,14 @@ class FirewireProjectRepository {
                 .input('fieldwireId', mssql.NVarChar(64), normalized.fieldwireId)
                 .input('name', mssql.NVarChar(200), normalized.name)
                 .input('projectNbr', mssql.NVarChar(100), normalized.projectNbr)
-                .input('address', mssql.NVarChar(500), normalized.address)
+                .input('address', mssql.NVarChar(500), resolvedAddress)
+                .input('latitude', mssql.Decimal(10, 7), geocode.latitude)
+                .input('longitude', mssql.Decimal(10, 7), geocode.longitude)
+                .input('geocodeStatus', mssql.NVarChar(50), geocode.geocodeStatus)
+                .input('geocodedAt', mssql.DateTime2, geocode.geocodedAt ? new Date(geocode.geocodedAt) : null)
                 .input('bidDueDate', mssql.DateTime2, new Date(bidDueDate))
                 .input('projectStatus', mssql.NVarChar(100), normalized.projectStatus)
+                .input('projectType', mssql.NVarChar(50), normalized.projectType)
                 .input('salesman', mssql.NVarChar(200), normalized.salesman)
                 .input('jobType', mssql.NVarChar(100), normalized.jobType)
                 .input('scopeType', mssql.NVarChar(100), normalized.scopeType)
@@ -258,7 +288,16 @@ class FirewireProjectRepository {
                 return null;
             }
             const normalized = this.normalizeInput(input);
+            const existingProject = yield this.getFirewireProject(projectId);
+            if (!existingProject) {
+                return null;
+            }
+            if (existingProject.projectStatus !== 'Estimation' && normalized.projectType !== existingProject.projectType) {
+                throw new Error('projectType cannot be changed after a project leaves Estimation.');
+            }
             const bidDueDate = normalized.bidDueDate || this.defaultBidDueDateIso();
+            const geocode = yield this.resolveProjectGeocode(normalized.address, existingProject);
+            const resolvedAddress = geocode.address || normalized.address;
             const pool = yield this.getPool();
             const query = [
                 'UPDATE dbo.firewireProjects',
@@ -267,8 +306,13 @@ class FirewireProjectRepository {
                 '    name = @name,',
                 '    projectNbr = @projectNbr,',
                 '    address = @address,',
+                '    latitude = @latitude,',
+                '    longitude = @longitude,',
+                '    geocodeStatus = @geocodeStatus,',
+                '    geocodedAt = @geocodedAt,',
                 '    bidDueDate = @bidDueDate,',
                 '    projectStatus = @projectStatus,',
+                '    projectType = @projectType,',
                 '    salesman = @salesman,',
                 '    jobType = @jobType,',
                 '    scopeType = @scopeType,',
@@ -284,9 +328,14 @@ class FirewireProjectRepository {
                 .input('fieldwireId', mssql.NVarChar(64), normalized.fieldwireId)
                 .input('name', mssql.NVarChar(200), normalized.name)
                 .input('projectNbr', mssql.NVarChar(100), normalized.projectNbr)
-                .input('address', mssql.NVarChar(500), normalized.address)
+                .input('address', mssql.NVarChar(500), resolvedAddress)
+                .input('latitude', mssql.Decimal(10, 7), geocode.latitude)
+                .input('longitude', mssql.Decimal(10, 7), geocode.longitude)
+                .input('geocodeStatus', mssql.NVarChar(50), geocode.geocodeStatus)
+                .input('geocodedAt', mssql.DateTime2, geocode.geocodedAt ? new Date(geocode.geocodedAt) : null)
                 .input('bidDueDate', mssql.DateTime2, new Date(bidDueDate))
                 .input('projectStatus', mssql.NVarChar(100), normalized.projectStatus)
+                .input('projectType', mssql.NVarChar(50), normalized.projectType)
                 .input('salesman', mssql.NVarChar(200), normalized.salesman)
                 .input('jobType', mssql.NVarChar(100), normalized.jobType)
                 .input('scopeType', mssql.NVarChar(100), normalized.scopeType)
@@ -302,6 +351,34 @@ class FirewireProjectRepository {
                 yield this.upsertWorksheetData(projectId, normalized.worksheetData, userId);
             }
             return this.getFirewireProject(projectId);
+        });
+    }
+    deleteFirewireProject(projectId) {
+        return __awaiter(this, void 0, void 0, function* () {
+            yield this.ensureTable();
+            if (!(0, uuid_1.validate)(projectId)) {
+                return false;
+            }
+            const existingProject = yield this.getFirewireProject(projectId);
+            if (!existingProject) {
+                return false;
+            }
+            const pool = yield this.getPool();
+            yield pool.request()
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;');
+            yield pool.request()
+                .input('workspaceKey', mssql.NVarChar(200), projectId)
+                .query([
+                "IF OBJECT_ID(N'dbo.workspaceStorage', N'U') IS NOT NULL",
+                'BEGIN',
+                "    DELETE FROM dbo.workspaceStorage WHERE [area] = N'project-doc-library' AND [workspaceKey] = @workspaceKey;",
+                'END;'
+            ].join('\n'));
+            const result = yield pool.request()
+                .input('uuid', mssql.UniqueIdentifier, projectId)
+                .query('DELETE FROM dbo.firewireProjects WHERE uuid = @uuid;');
+            return !!result.rowsAffected && result.rowsAffected[0] > 0;
         });
     }
     updateFieldwireMapping(projectId, input, userId) {
@@ -467,8 +544,13 @@ class FirewireProjectRepository {
                 '        name NVARCHAR(200) NOT NULL,',
                 '        projectNbr NVARCHAR(100) NOT NULL,',
                 "        address NVARCHAR(500) NOT NULL CONSTRAINT DF_firewireProjects_address DEFAULT N'',",
+                '        latitude DECIMAL(10, 7) NULL,',
+                '        longitude DECIMAL(10, 7) NULL,',
+                "        geocodeStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_firewireProjects_geocodeStatus DEFAULT N'',",
+                '        geocodedAt DATETIME2(7) NULL,',
                 '        bidDueDate DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjects_bidDueDate DEFAULT DATEADD(DAY, 30, SYSUTCDATETIME()),',
                 "        projectStatus NVARCHAR(100) NOT NULL CONSTRAINT DF_firewireProjects_projectStatus DEFAULT N'Estimation',",
+                `        projectType NVARCHAR(50) NOT NULL CONSTRAINT DF_firewireProjects_projectType DEFAULT N'${DEFAULT_FIREWIRE_PROJECT_TYPE}',`,
                 "        salesman NVARCHAR(200) NOT NULL CONSTRAINT DF_firewireProjects_salesman DEFAULT N'',",
                 "        jobType NVARCHAR(100) NOT NULL CONSTRAINT DF_firewireProjects_jobType DEFAULT N'',",
                 "        scopeType NVARCHAR(100) NOT NULL CONSTRAINT DF_firewireProjects_scopeType DEFAULT N'',",
@@ -524,6 +606,10 @@ class FirewireProjectRepository {
                 'BEGIN',
                 "    ALTER TABLE dbo.firewireProjects ADD isManualLocked BIT NOT NULL CONSTRAINT DF_firewireProjects_isManualLocked_existing DEFAULT 0;",
                 'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'projectType') IS NULL",
+                'BEGIN',
+                `    ALTER TABLE dbo.firewireProjects ADD projectType NVARCHAR(50) NOT NULL CONSTRAINT DF_firewireProjects_projectType_existing DEFAULT N'${DEFAULT_FIREWIRE_PROJECT_TYPE}';`,
+                'END;',
                 "IF COL_LENGTH('dbo.firewireProjects', 'manualLockedAt') IS NULL",
                 'BEGIN',
                 "    ALTER TABLE dbo.firewireProjects ADD manualLockedAt DATETIME2(7) NULL;",
@@ -531,12 +617,35 @@ class FirewireProjectRepository {
                 "IF COL_LENGTH('dbo.firewireProjects', 'manualLockedBy') IS NULL",
                 'BEGIN',
                 "    ALTER TABLE dbo.firewireProjects ADD manualLockedBy NVARCHAR(256) NULL;",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'latitude') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD latitude DECIMAL(10, 7) NULL;",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'longitude') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD longitude DECIMAL(10, 7) NULL;",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'geocodeStatus') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD geocodeStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_firewireProjects_geocodeStatus_existing DEFAULT N'';",
+                'END;',
+                "IF COL_LENGTH('dbo.firewireProjects', 'geocodedAt') IS NULL",
+                'BEGIN',
+                "    ALTER TABLE dbo.firewireProjects ADD geocodedAt DATETIME2(7) NULL;",
+                'END;'
+            ].join('\n');
+            const backfillProjectTypeQuery = [
+                "IF COL_LENGTH('dbo.firewireProjects', 'projectType') IS NOT NULL",
+                'BEGIN',
+                `    EXEC(N'UPDATE dbo.firewireProjects SET projectType = N''${DEFAULT_FIREWIRE_PROJECT_TYPE}'' WHERE projectType IS NULL OR LTRIM(RTRIM(projectType)) = N'''';');`,
                 'END;'
             ].join('\n');
             yield pool.request().batch(createQuery);
             yield pool.request().batch(worksheetQuery);
             yield pool.request().batch(templateQuery);
             yield pool.request().batch(alterQuery);
+            yield pool.request().batch(backfillProjectTypeQuery);
         });
     }
     getPool() {
@@ -549,14 +658,16 @@ class FirewireProjectRepository {
         });
     }
     normalizeInput(input) {
+        const normalizedProjectStatus = this.optionalString(input === null || input === void 0 ? void 0 : input.projectStatus, 100) || 'Estimation';
         return {
             fieldwireId: this.normalizeFieldwireId(input === null || input === void 0 ? void 0 : input.fieldwireId),
             worksheetData: this.normalizeWorksheetData(input === null || input === void 0 ? void 0 : input.worksheetData),
             name: this.requireString(input === null || input === void 0 ? void 0 : input.name, 'name', 200),
-            projectNbr: this.requireString(input === null || input === void 0 ? void 0 : input.projectNbr, 'projectNbr', 100),
+            projectNbr: this.normalizeProjectNbrInput(input === null || input === void 0 ? void 0 : input.projectNbr),
             address: this.optionalString(input === null || input === void 0 ? void 0 : input.address, 500),
             bidDueDate: this.normalizeDate(input === null || input === void 0 ? void 0 : input.bidDueDate),
-            projectStatus: this.optionalString(input === null || input === void 0 ? void 0 : input.projectStatus, 100) || 'Estimation',
+            projectStatus: normalizedProjectStatus,
+            projectType: this.normalizeProjectType(input === null || input === void 0 ? void 0 : input.projectType),
             salesman: this.optionalString(input === null || input === void 0 ? void 0 : input.salesman, 200),
             jobType: this.optionalString(input === null || input === void 0 ? void 0 : input.jobType, 100),
             scopeType: this.optionalString(input === null || input === void 0 ? void 0 : input.scopeType, 100),
@@ -564,6 +675,130 @@ class FirewireProjectRepository {
             difficulty: this.optionalString(input === null || input === void 0 ? void 0 : input.difficulty, 100),
             totalSqFt: this.normalizeTotalSqFt(input === null || input === void 0 ? void 0 : input.totalSqFt)
         };
+    }
+    normalizeProjectNbrInput(input) {
+        return this.optionalString(input, 100);
+    }
+    resolveProjectGeocode(address, existingProject) {
+        return __awaiter(this, void 0, void 0, function* () {
+            var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+            const normalizedAddress = this.optionalString(address, 500);
+            const existingAddress = this.optionalString(existingProject === null || existingProject === void 0 ? void 0 : existingProject.address, 500);
+            const addressChanged = normalizedAddress.toLowerCase() !== existingAddress.toLowerCase();
+            const hasExistingMappedCoordinates = typeof (existingProject === null || existingProject === void 0 ? void 0 : existingProject.latitude) === 'number' && typeof (existingProject === null || existingProject === void 0 ? void 0 : existingProject.longitude) === 'number';
+            if (!normalizedAddress) {
+                return {
+                    address: null,
+                    latitude: null,
+                    longitude: null,
+                    geocodeStatus: 'Missing Address',
+                    geocodedAt: null
+                };
+            }
+            if (existingProject && !addressChanged && hasExistingMappedCoordinates && existingProject.geocodeStatus === 'Mapped') {
+                return {
+                    address: existingProject.address || normalizedAddress,
+                    latitude: existingProject.latitude,
+                    longitude: existingProject.longitude,
+                    geocodeStatus: existingProject.geocodeStatus || 'Mapped',
+                    geocodedAt: existingProject.geocodedAt || null
+                };
+            }
+            const subscriptionKey = (process.env.AZURE_MAPS_SUBSCRIPTION_KEY || process.env.AZURE_MAPS_KEY || '').trim();
+            if (!subscriptionKey) {
+                return {
+                    address: (existingProject === null || existingProject === void 0 ? void 0 : existingProject.address) || normalizedAddress,
+                    latitude: (_a = existingProject === null || existingProject === void 0 ? void 0 : existingProject.latitude) !== null && _a !== void 0 ? _a : null,
+                    longitude: (_b = existingProject === null || existingProject === void 0 ? void 0 : existingProject.longitude) !== null && _b !== void 0 ? _b : null,
+                    geocodeStatus: DEFAULT_GEOCODE_STATUS,
+                    geocodedAt: (existingProject === null || existingProject === void 0 ? void 0 : existingProject.geocodedAt) || null
+                };
+            }
+            const apiVersion = (process.env.AZURE_MAPS_API_VERSION || '1.0').trim();
+            const baseUrl = (process.env.AZURE_MAPS_BASE_URL || 'https://atlas.microsoft.com').trim().replace(/\/$/, '');
+            const url = `${baseUrl}/search/address/json?api-version=${encodeURIComponent(apiVersion)}&subscription-key=${encodeURIComponent(subscriptionKey)}&query=${encodeURIComponent(normalizedAddress)}&limit=1`;
+            try {
+                const response = yield fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        Accept: 'application/json'
+                    }
+                });
+                if (!response.ok) {
+                    return {
+                        address: (existingProject === null || existingProject === void 0 ? void 0 : existingProject.address) || normalizedAddress,
+                        latitude: (_c = existingProject === null || existingProject === void 0 ? void 0 : existingProject.latitude) !== null && _c !== void 0 ? _c : null,
+                        longitude: (_d = existingProject === null || existingProject === void 0 ? void 0 : existingProject.longitude) !== null && _d !== void 0 ? _d : null,
+                        geocodeStatus: 'Error',
+                        geocodedAt: (existingProject === null || existingProject === void 0 ? void 0 : existingProject.geocodedAt) || null
+                    };
+                }
+                const payload = yield response.json();
+                const bestResult = Array.isArray(payload === null || payload === void 0 ? void 0 : payload.results) ? payload.results[0] : null;
+                const standardizedAddress = this.optionalString((_e = bestResult === null || bestResult === void 0 ? void 0 : bestResult.address) === null || _e === void 0 ? void 0 : _e.freeformAddress, 500)
+                    || this.buildStandardizedAddress(bestResult === null || bestResult === void 0 ? void 0 : bestResult.address)
+                    || normalizedAddress;
+                const latitude = (_f = bestResult === null || bestResult === void 0 ? void 0 : bestResult.position) === null || _f === void 0 ? void 0 : _f.lat;
+                const longitude = (_g = bestResult === null || bestResult === void 0 ? void 0 : bestResult.position) === null || _g === void 0 ? void 0 : _g.lon;
+                if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+                    return {
+                        address: normalizedAddress,
+                        latitude: null,
+                        longitude: null,
+                        geocodeStatus: 'Not Found',
+                        geocodedAt: new Date().toISOString()
+                    };
+                }
+                if (this.requiresAddressVerification(normalizedAddress, bestResult === null || bestResult === void 0 ? void 0 : bestResult.address, standardizedAddress)) {
+                    return {
+                        address: normalizedAddress,
+                        latitude: null,
+                        longitude: null,
+                        geocodeStatus: 'Needs Verification',
+                        geocodedAt: new Date().toISOString()
+                    };
+                }
+                return {
+                    address: standardizedAddress,
+                    latitude,
+                    longitude,
+                    geocodeStatus: 'Mapped',
+                    geocodedAt: new Date().toISOString()
+                };
+            }
+            catch (_k) {
+                return {
+                    address: (existingProject === null || existingProject === void 0 ? void 0 : existingProject.address) || normalizedAddress,
+                    latitude: (_h = existingProject === null || existingProject === void 0 ? void 0 : existingProject.latitude) !== null && _h !== void 0 ? _h : null,
+                    longitude: (_j = existingProject === null || existingProject === void 0 ? void 0 : existingProject.longitude) !== null && _j !== void 0 ? _j : null,
+                    geocodeStatus: 'Error',
+                    geocodedAt: (existingProject === null || existingProject === void 0 ? void 0 : existingProject.geocodedAt) || null
+                };
+            }
+        });
+    }
+    buildStandardizedAddress(address) {
+        const streetNumber = this.optionalString(address === null || address === void 0 ? void 0 : address.streetNumber, 50);
+        const streetName = this.optionalString(address === null || address === void 0 ? void 0 : address.streetName, 200);
+        const municipality = this.optionalString(address === null || address === void 0 ? void 0 : address.municipality, 120);
+        const countrySubdivision = this.optionalString(address === null || address === void 0 ? void 0 : address.countrySubdivision, 120);
+        const postalCode = this.optionalString(address === null || address === void 0 ? void 0 : address.postalCode, 32);
+        const street = [streetNumber, streetName].filter((value) => value).join(' ').trim();
+        const locality = [municipality, countrySubdivision, postalCode].filter((value) => value).join(', ').replace(/, (?=[^,]+$)/, ' ');
+        return [street, locality].filter((value) => value).join(', ').trim();
+    }
+    requiresAddressVerification(inputAddress, resultAddress, standardizedAddress) {
+        const inputStreetNumber = this.extractStreetNumber(inputAddress);
+        if (!inputStreetNumber) {
+            return false;
+        }
+        const resultStreetNumber = this.optionalString(resultAddress === null || resultAddress === void 0 ? void 0 : resultAddress.streetNumber, 50)
+            || this.extractStreetNumber(standardizedAddress);
+        return !resultStreetNumber || resultStreetNumber !== inputStreetNumber;
+    }
+    extractStreetNumber(address) {
+        const match = /^\s*(\d+[A-Za-z\-]*)\b/.exec(String(address || '').trim());
+        return (match === null || match === void 0 ? void 0 : match[1]) || '';
     }
     normalizeFieldwireId(input) {
         if (typeof input !== 'string') {
@@ -600,6 +835,7 @@ class FirewireProjectRepository {
             return {};
         }
         return {
+            projectType: this.normalizeProjectType(input.projectType),
             jobType: this.optionalString(input.jobType, 100),
             scopeType: this.optionalString(input.scopeType, 100),
             projectScope: this.optionalString(input.projectScope, 4000),
@@ -618,6 +854,17 @@ class FirewireProjectRepository {
             return '';
         }
         return input.trim().toLowerCase();
+    }
+    normalizeProjectType(input) {
+        const value = typeof input === 'string' ? input.trim() : '';
+        const matched = FIREWIRE_PROJECT_TYPES.find((item) => item === value);
+        if (matched) {
+            return matched;
+        }
+        if (!value) {
+            return DEFAULT_FIREWIRE_PROJECT_TYPE;
+        }
+        throw new Error(`Invalid projectType. Allowed values: ${FIREWIRE_PROJECT_TYPES.join(', ')}.`);
     }
     normalizeDate(input) {
         if (!input) {
@@ -655,6 +902,7 @@ class FirewireProjectRepository {
         return value.toISOString();
     }
     mapSqlRow(row) {
+        const geocodeStatus = row.geocodeStatus || null;
         return {
             uuid: row.uuid,
             fieldwireId: row.fieldwireId ? String(row.fieldwireId) : null,
@@ -665,8 +913,14 @@ class FirewireProjectRepository {
             name: row.name,
             projectNbr: row.projectNbr,
             address: row.address,
+            addressNeedsVerification: this.addressNeedsVerification(geocodeStatus),
+            latitude: row.latitude === null || typeof row.latitude === 'undefined' ? null : Number(row.latitude),
+            longitude: row.longitude === null || typeof row.longitude === 'undefined' ? null : Number(row.longitude),
+            geocodeStatus,
+            geocodedAt: this.toIso(row.geocodedAt),
             bidDueDate: this.toIso(row.bidDueDate) || this.defaultBidDueDateIso(),
             projectStatus: row.projectStatus || 'Estimation',
+            projectType: this.normalizeProjectType(row.projectType),
             salesman: row.salesman,
             jobType: row.jobType,
             scopeType: row.scopeType,
@@ -776,8 +1030,14 @@ class FirewireProjectRepository {
             name: (project === null || project === void 0 ? void 0 : project.name) || '',
             projectNbr: (project === null || project === void 0 ? void 0 : project.code) || '',
             address: (project === null || project === void 0 ? void 0 : project.address) || '',
+            addressNeedsVerification: false,
+            latitude: null,
+            longitude: null,
+            geocodeStatus: null,
+            geocodedAt: null,
             bidDueDate: null,
             projectStatus: null,
+            projectType: null,
             salesman: null,
             jobType: null,
             scopeType: null,
@@ -800,8 +1060,14 @@ class FirewireProjectRepository {
             name: project.name,
             projectNbr: project.projectNbr,
             address: project.address,
+            addressNeedsVerification: project.addressNeedsVerification,
+            latitude: project.latitude,
+            longitude: project.longitude,
+            geocodeStatus: project.geocodeStatus,
+            geocodedAt: project.geocodedAt,
             bidDueDate: project.bidDueDate,
             projectStatus: project.projectStatus,
+            projectType: project.projectType,
             salesman: project.salesman,
             jobType: project.jobType,
             scopeType: project.scopeType,
@@ -825,8 +1091,14 @@ class FirewireProjectRepository {
             name: firewireProject.name || (fieldwireProject === null || fieldwireProject === void 0 ? void 0 : fieldwireProject.name) || '',
             projectNbr: firewireProject.projectNbr || (fieldwireProject === null || fieldwireProject === void 0 ? void 0 : fieldwireProject.code) || '',
             address: firewireProject.address || (fieldwireProject === null || fieldwireProject === void 0 ? void 0 : fieldwireProject.address) || '',
+            addressNeedsVerification: firewireProject.addressNeedsVerification,
+            latitude: firewireProject.latitude,
+            longitude: firewireProject.longitude,
+            geocodeStatus: firewireProject.geocodeStatus,
+            geocodedAt: firewireProject.geocodedAt,
             bidDueDate: firewireProject.bidDueDate,
             projectStatus: firewireProject.projectStatus,
+            projectType: firewireProject.projectType,
             salesman: firewireProject.salesman,
             jobType: firewireProject.jobType,
             scopeType: firewireProject.scopeType,
@@ -848,6 +1120,9 @@ class FirewireProjectRepository {
             return null;
         }
         return value.toISOString();
+    }
+    addressNeedsVerification(geocodeStatus) {
+        return !!geocodeStatus && geocodeStatus !== 'Mapped';
     }
 }
 exports.FirewireProjectRepository = FirewireProjectRepository;

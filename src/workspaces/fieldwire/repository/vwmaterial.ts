@@ -2,8 +2,6 @@ export interface VwMaterial {
     materialId: string
     name: string
     shortName: string
-    categoryId: string
-    categoryName: string
     vendorId: string
     vendorName: string
     partNumber: string

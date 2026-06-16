@@ -50,6 +50,7 @@ const fs_1 = require("fs");
 const path = __importStar(require("path"));
 const fs_2 = __importDefault(require("fs"));
 const csv_parse_1 = require("csv-parse");
+const node_module_1 = require("node:module");
 const uuid_1 = require("uuid");
 class Utils {
     /**
@@ -123,8 +124,8 @@ class Utils {
     static loadManifest(filePath, ...constructorArgs) {
         return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
             try {
-                // Dynamically import the module
-                const module = yield Promise.resolve(`${filePath}`).then(s => __importStar(require(s)));
+                const requireFromManifest = (0, node_module_1.createRequire)(filePath);
+                const module = requireFromManifest(filePath);
                 if (!module.default) {
                     throw new Error(`Default module not found in '${filePath}'.`);
                 }

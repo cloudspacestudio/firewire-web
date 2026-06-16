@@ -2,7 +2,8 @@ export interface Device {
     deviceId: string
     name: string
     shortName?: string
-    categoryId: string
+    categoryName: string
+    includeOnFloorplan?: boolean
     vendorId: string
     partNumber: string
     link: string

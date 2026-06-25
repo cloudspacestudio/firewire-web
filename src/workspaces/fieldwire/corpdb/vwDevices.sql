@@ -90,16 +90,6 @@ Begin DesignProperties =
             DisplayFlags = 280
             TopColumn = 13
          End
-         Begin Table = "categories"
-            Begin Extent = 
-               Top = 7
-               Left = 295
-               Bottom = 170
-               Right = 489
-            End
-            DisplayFlags = 280
-            TopColumn = 0
-         End
          Begin Table = "vendors"
             Begin Extent = 
                Top = 190

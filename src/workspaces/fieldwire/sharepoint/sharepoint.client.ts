@@ -138,7 +138,7 @@ export class SharePointClient {
                 Authorization: `Bearer ${token}`,
                 'Content-Type': params.contentType || 'application/octet-stream'
             },
-            body: params.buffer
+            body: params.buffer as unknown as BodyInit
         })
 
         if (uploadRes.status >= 300) {

@@ -1,5 +1,5 @@
 import { Vendor } from "../repository/vendor"
-import { Material } from "../repository/material"
+import { VwDeviceMaterial } from "../repository/vwdevicematerial"
 
 export interface ResolvedDevice {
     id: string
@@ -15,7 +15,7 @@ export interface ResolvedDevice {
         handle?: string
     }
     vendor: Vendor
-    materials: Material[]
+    materials: VwDeviceMaterial[]
     slcAddress: string
     serialNumber: string
     strobeAddress: string

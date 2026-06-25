@@ -734,6 +734,43 @@ export class FirewireProjectRepository {
             '    );',
             'END;'
         ].join('\n')
+        const bomRowPartsQuery = [
+            "IF OBJECT_ID(N'dbo.bomRowParts', N'U') IS NULL",
+            'BEGIN',
+            '    CREATE TABLE dbo.bomRowParts (',
+            '        bomRowPartId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_bomRowParts PRIMARY KEY,',
+            '        projectId UNIQUEIDENTIFIER NOT NULL,',
+            '        bomSectionId NVARCHAR(120) NULL,',
+            '        bomSectionTitle NVARCHAR(500) NOT NULL CONSTRAINT DF_bomRowParts_bomSectionTitle DEFAULT N\'\',',
+            '        bomRowId NVARCHAR(120) NOT NULL,',
+            '        deviceId UNIQUEIDENTIFIER NULL,',
+            '        devicePartId UNIQUEIDENTIFIER NULL,',
+            '        partId UNIQUEIDENTIFIER NULL,',
+            '        vendorId UNIQUEIDENTIFIER NULL,',
+            '        partNumber NVARCHAR(120) NOT NULL,',
+            '        description NVARCHAR(2000) NULL,',
+            '        parentCategory NVARCHAR(500) NULL,',
+            '        category NVARCHAR(500) NULL,',
+            '        msrp MONEY NULL,',
+            '        cost MONEY NULL,',
+            '        quantityPerDevice INT NOT NULL CONSTRAINT DF_bomRowParts_quantityPerDevice DEFAULT 1,',
+            '        bomQuantity DECIMAL(18, 4) NOT NULL CONSTRAINT DF_bomRowParts_bomQuantity DEFAULT 0,',
+            '        sortOrder INT NOT NULL CONSTRAINT DF_bomRowParts_sortOrder DEFAULT 0,',
+            '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_bomRowParts_createdAt DEFAULT SYSUTCDATETIME(),',
+            '        createdBy NVARCHAR(256) NOT NULL,',
+            '        updatedAt DATETIME2(7) NOT NULL CONSTRAINT DF_bomRowParts_updatedAt DEFAULT SYSUTCDATETIME(),',
+            '        updatedBy NVARCHAR(256) NOT NULL',
+            '    );',
+            'END;',
+            "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_bomRowParts_project_row' AND object_id = OBJECT_ID('dbo.bomRowParts'))",
+            'BEGIN',
+            '    CREATE NONCLUSTERED INDEX IX_bomRowParts_project_row ON dbo.bomRowParts(projectId, bomRowId, sortOrder);',
+            'END;',
+            "IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_bomRowParts_quantityPerDevice_positive')",
+            'BEGIN',
+            '    ALTER TABLE dbo.bomRowParts WITH NOCHECK ADD CONSTRAINT CK_bomRowParts_quantityPerDevice_positive CHECK (quantityPerDevice > 0);',
+            'END;'
+        ].join('\n')
         const alterQuery = [
             "IF COL_LENGTH('dbo.firewireProjects', 'fieldwireId') IS NULL",
             'BEGIN',
@@ -785,6 +822,7 @@ export class FirewireProjectRepository {
         await pool.request().batch(createQuery)
         await pool.request().batch(worksheetQuery)
         await pool.request().batch(templateQuery)
+        await pool.request().batch(bomRowPartsQuery)
         await pool.request().batch(alterQuery)
         await pool.request().batch(backfillProjectTypeQuery)
     }
@@ -1064,6 +1102,14 @@ export class FirewireProjectRepository {
         return input.trim().slice(0, maxLength)
     }
 
+    private optionalNumber(input: unknown): number | null {
+        if (input === null || typeof input === 'undefined' || input === '') {
+            return null
+        }
+        const value = Number(input)
+        return Number.isFinite(value) ? value : null
+    }
+
     private defaultBidDueDateIso(): string {
         const value = new Date()
         value.setUTCDate(value.getUTCDate() + 30)
@@ -1132,6 +1178,7 @@ export class FirewireProjectRepository {
             await pool.request()
                 .input('projectId', mssql.UniqueIdentifier, projectId)
                 .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;')
+            await this.syncBomRowParts(projectId, null, userId)
             return
         }
 
@@ -1156,6 +1203,102 @@ export class FirewireProjectRepository {
             .input('createdBy', mssql.NVarChar(256), userId)
             .input('updatedBy', mssql.NVarChar(256), userId)
             .query(query)
+        await this.syncBomRowParts(projectId, worksheetData, userId)
+    }
+
+    private async syncBomRowParts(projectId: string, worksheetData: any, userId: string): Promise<void> {
+        await this.ensureTable()
+        const pool = await this.getPool()
+        const rows = this.extractBomRowParts(projectId, worksheetData)
+
+        const tx = new mssql.Transaction(pool)
+        await tx.begin()
+        try {
+            await new mssql.Request(tx)
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query('DELETE FROM dbo.bomRowParts WHERE projectId = @projectId;')
+
+            for (const row of rows) {
+                await new mssql.Request(tx)
+                    .input('bomRowPartId', mssql.UniqueIdentifier, row.bomRowPartId)
+                    .input('projectId', mssql.UniqueIdentifier, projectId)
+                    .input('bomSectionId', mssql.NVarChar(120), row.bomSectionId || null)
+                    .input('bomSectionTitle', mssql.NVarChar(500), row.bomSectionTitle)
+                    .input('bomRowId', mssql.NVarChar(120), row.bomRowId)
+                    .input('deviceId', mssql.UniqueIdentifier, row.deviceId || null)
+                    .input('devicePartId', mssql.UniqueIdentifier, row.devicePartId || null)
+                    .input('partId', mssql.UniqueIdentifier, row.partId || null)
+                    .input('vendorId', mssql.UniqueIdentifier, row.vendorId || null)
+                    .input('partNumber', mssql.NVarChar(120), row.partNumber)
+                    .input('description', mssql.NVarChar(2000), row.description || null)
+                    .input('parentCategory', mssql.NVarChar(500), row.parentCategory || null)
+                    .input('category', mssql.NVarChar(500), row.category || null)
+                    .input('msrp', mssql.Money, row.msrp ?? null)
+                    .input('cost', mssql.Money, row.cost ?? null)
+                    .input('quantityPerDevice', mssql.Int, row.quantityPerDevice)
+                    .input('bomQuantity', mssql.Decimal(18, 4), row.bomQuantity)
+                    .input('sortOrder', mssql.Int, row.sortOrder)
+                    .input('userId', mssql.NVarChar(256), userId)
+                    .query(`
+                        INSERT INTO dbo.bomRowParts(
+                            bomRowPartId, projectId, bomSectionId, bomSectionTitle, bomRowId,
+                            deviceId, devicePartId, partId, vendorId, partNumber, description, parentCategory,
+                            category, msrp, cost, quantityPerDevice, bomQuantity, sortOrder, createdBy, updatedBy
+                        )
+                        VALUES(
+                            @bomRowPartId, @projectId, @bomSectionId, @bomSectionTitle, @bomRowId,
+                            @deviceId, @devicePartId, @partId, @vendorId, @partNumber, @description, @parentCategory,
+                            @category, @msrp, @cost, @quantityPerDevice, @bomQuantity, @sortOrder, @userId, @userId
+                        );
+                    `)
+            }
+            await tx.commit()
+        } catch (err) {
+            await tx.rollback()
+            throw err
+        }
+    }
+
+    private extractBomRowParts(projectId: string, worksheetData: any): any[] {
+        if (!worksheetData || typeof worksheetData !== 'object') {
+            return []
+        }
+        const sections = Array.isArray(worksheetData.bomSections) ? worksheetData.bomSections : []
+        const rows: any[] = []
+        for (const section of sections) {
+            const sectionRows = Array.isArray(section?.rows) ? section.rows : []
+            for (const bomRow of sectionRows) {
+                const bomRowParts = Array.isArray(bomRow?.bomRowParts) ? bomRow.bomRowParts : []
+                for (const bomRowPart of bomRowParts) {
+                    const partNumber = String(bomRowPart?.partNumber || '').trim()
+                    const bomRowId = String(bomRow?.id || '').trim()
+                    if (!partNumber || !bomRowId) {
+                        continue
+                    }
+                    rows.push({
+                        bomRowPartId: validateUuid(String(bomRowPart?.bomRowPartId || '')) ? String(bomRowPart.bomRowPartId) : uuidv4(),
+                        projectId,
+                        bomSectionId: String(section?.sectionKey || '').trim(),
+                        bomSectionTitle: String(section?.title || '').trim(),
+                        bomRowId,
+                        deviceId: validateUuid(String(bomRowPart?.deviceId || '')) ? String(bomRowPart.deviceId) : null,
+                        devicePartId: validateUuid(String(bomRowPart?.devicePartId || '')) ? String(bomRowPart.devicePartId) : null,
+                        partId: validateUuid(String(bomRowPart?.partId || '')) ? String(bomRowPart.partId) : null,
+                        vendorId: validateUuid(String(bomRowPart?.vendorId || '')) ? String(bomRowPart.vendorId) : null,
+                        partNumber,
+                        description: String(bomRowPart?.description || '').trim(),
+                        parentCategory: String(bomRowPart?.parentCategory || '').trim(),
+                        category: String(bomRowPart?.category || '').trim(),
+                        msrp: this.optionalNumber(bomRowPart?.msrp),
+                        cost: this.optionalNumber(bomRowPart?.cost),
+                        quantityPerDevice: Math.max(1, Math.floor(Number(bomRowPart?.quantityPerDevice || 1))),
+                        bomQuantity: Number(bomRow?.qty || 0),
+                        sortOrder: rows.length
+                    })
+                }
+            }
+        }
+        return rows
     }
 
     private mapTemplateRow(row: SqlTemplateRow): FirewireProjectTemplateRecord {

@@ -1,4 +1,11 @@
 export interface VwDeviceMaterial {
+    devicePartId?: string
+    partId?: string | null
+    vendorId?: string
+    vendorName?: string
+    parentCategory?: string | null
+    category?: string | null
+    quantityPerDevice?: number
     deviceId: string
     deviceName: string
     deviceShortName: string

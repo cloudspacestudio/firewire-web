@@ -13,9 +13,7 @@ import { Utils } from '../../core/utils'
 
 import { ImportItem } from './schemas/importitem.schemas'
 import { Device } from './repository/device';
-import { Material } from './repository/material';
 import { Vendor } from './repository/vendor';
-import { DeviceMaterial } from './repository/devicematerial';
 import { SqlDb } from './repository/sqldb';
 import { TestDevice } from './repository/testdevice';
 import { ResolvedDevice } from './schemas/resolvedDevice';
@@ -413,7 +411,7 @@ export class FieldwireSDK {
                 if (result.handle!==safeHandle) {
                     // handle was changed because was not unique in project
                     // update database record to match fieldwire handle
-                    // TODO: UPDATE categories SET handle=result.handle WHERE categoryId='result.id'
+                    // TODO: persist refreshed team handles if the local Fieldwire team cache is restored.
                 }
                 return resolve(result)
             } catch (err) {
@@ -1031,8 +1029,6 @@ export class FieldwireSDK {
                 const testDevices: TestDevice[] = await sqldb.getTestDevices()
                 const devices = await sqldb.getDevices()
                 const vendors = await sqldb.getVendors()
-                const materials = await sqldb.getMaterials()
-                const deviceMaterials = await sqldb.getDeviceMaterials()
                 const parts = await sqldb.getParts()
                 if (!testDevices || testDevices.length <= 0) {
                     return resolve(false)
@@ -1045,19 +1041,17 @@ export class FieldwireSDK {
                             s.vendorId === testVendor.vendorId &&
                             String(s.partNumber || s.PartNumber || '').trim().toLowerCase() === String(testDevice.partNumber || '').trim().toLowerCase()
                         )
-                        // Look if we have the material
-                        let testMaterial: Material | null | undefined = materials.find(s => s.vendorId===testVendor.vendorId && s.partNumber===testDevice.partNumber)
-                        if (!testMaterial) {
-                            // We need to create the material record
-                            const newMaterial: Material = {
-                                materialId: '',
+                        let testDeviceInDb: Device | null | undefined = devices.find(s => s.partNumber===testDevice?.partNumber && s.vendorId===testVendor.vendorId)
+                        if (!testDeviceInDb) {
+                            const newDevice: Device = {
+                                deviceId: '',
                                 name: testDevice.title,
                                 shortName: testDevice.title,
                                 vendorId: testVendor?.vendorId,
-                                categoryName: String(testPart?.category ?? testPart?.Category ?? testDevice.category ?? '').trim(),
+                                categoryName: testDevice.category,
+                                includeOnFloorplan: !!testDevice.category,
                                 partNumber: testDevice.partNumber,
                                 link: testPart?.partId || testPart?.ProductID || '',
-                                msrp: Number(testPart?.msrp ?? testPart?.MSRPPrice ?? 0),
                                 cost: Number(testPart?.cost ?? testPart?.SalesPrice ?? testPart?.msrp ?? testPart?.MSRPPrice ?? 0),
                                 defaultLabor: defaultMaterialLabor,
                                 slcAddress: testDevice.slcAddress,
@@ -1065,40 +1059,33 @@ export class FieldwireSDK {
                                 strobeAddress: testDevice.strobeAddress,
                                 speakerAddress: testDevice.speakerAddress
                             }
-                            await sqldb.createMaterial(newMaterial)
-                            testMaterial = await sqldb.getMaterialByPartNumber(newMaterial.partNumber)
-                        }
-                        if (testMaterial) {
-                            // Check if device already exists, if not create it
-                            let testDeviceInDb: Device | null | undefined = devices.find(s => s.partNumber===testDevice?.partNumber && s.vendorId===testVendor.vendorId)
-                            if (!testDeviceInDb) {
-                                // We need to create the device record
-                                const newDevice: Device = {
-                                    deviceId: '',
-                                    name: testDevice.title,
-                                    shortName: testDevice.title,
-                                    vendorId: testVendor?.vendorId,
-                                    categoryName: testDevice.category,
-                                    includeOnFloorplan: !!testDevice.category,
-                                    partNumber: testDevice.partNumber,
-                                    link: testPart?.partId || testPart?.ProductID || '',
-                                    cost: Number(testPart?.cost ?? testPart?.SalesPrice ?? testPart?.msrp ?? testPart?.MSRPPrice ?? 0),
-                                    defaultLabor: defaultMaterialLabor,
-                                    slcAddress: testDevice.slcAddress,
-                                    serialNumber: testDevice.serialNumber,
-                                    strobeAddress: testDevice.strobeAddress,
-                                    speakerAddress: testDevice.speakerAddress
-                                }
-                                await sqldb.createDevice(newDevice)
-                                testDeviceInDb = await sqldb.getDeviceByPartNumber(newDevice.partNumber)
-                            }
+                            await sqldb.createDevice(newDevice)
+                            testDeviceInDb = await sqldb.getDeviceByPartNumber(newDevice.partNumber)
                             if (testDeviceInDb) {
-                                // We have Material and Device now
-                                // Make record into devicematerials
-                                let testDeviceMaterial: DeviceMaterial|undefined|null = deviceMaterials.find(s => s.deviceId===testDeviceInDb?.deviceId&&s.materialId===testMaterial?.materialId)
-                                if (!testDeviceMaterial) {
-                                    await sqldb.createDeviceMaterialMap(testDeviceInDb?.deviceId, testMaterial?.materialId)
-                                    testDeviceMaterial = await sqldb.getDeviceMaterialByIds(testDeviceInDb?.deviceId, testMaterial?.materialId)
+                                devices.push(testDeviceInDb)
+                            }
+                        }
+                        if (testDeviceInDb) {
+                            const existingParts = await sqldb.getDevicePartsByDeviceId(testDeviceInDb.deviceId)
+                            const hasDevicePart = existingParts.some((row) =>
+                                String(row.vendorId || '').toLowerCase() === String(testVendor.vendorId || '').toLowerCase() &&
+                                String(row.partNumber || '').trim().toLowerCase() === String(testDevice.partNumber || '').trim().toLowerCase()
+                            )
+                            if (!hasDevicePart) {
+                                if (testPart) {
+                                    await sqldb.createDevicePartFromPart(testDeviceInDb.deviceId, testPart, 1, 'system')
+                                } else {
+                                    await sqldb.replaceDeviceParts(testDeviceInDb.deviceId, [
+                                        ...existingParts,
+                                        {
+                                            vendorId: testVendor.vendorId,
+                                            partNumber: testDevice.partNumber,
+                                            description: testDevice.title,
+                                            category: testDevice.category,
+                                            cost: testDeviceInDb.cost,
+                                            quantityPerDevice: 1
+                                        }
+                                    ], 'system')
                                 }
                             }
                         }

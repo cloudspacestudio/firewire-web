@@ -5,8 +5,6 @@ import { FieldwireSDK } from "../../fieldwire";
 import { Device } from '../../repository/device';
 import { Vendor } from '../../repository/vendor';
 import { SqlDb } from '../../repository/sqldb';
-import { Material } from '../../repository/material';
-import { DeviceMaterial } from '../../repository/devicematerial';
 import { TeamSchema } from '../../schemas/team.schema';
 import { MaterialAttribute } from '../../repository/materialattribute';
 import { TaskTypeAttributeSchema } from '../../schemas/tasktypeattribute';
@@ -14,13 +12,13 @@ import { MaterialSubTask } from '../../repository/materialsubtask';
 import { DeviceResolutionStrategy } from '../../repository/deviceResolutionStrategy';
 import { DeviceAlias } from '../../repository/devicealias';
 import { DeviceStrategies, FormulaStrategy } from '../strategies/device.strategies';
+import { VwDeviceMaterial } from '../../repository/vwdevicematerial';
 
 export class DeviceResolver {
 
     public devicesFromDb: Device[] = []
     public vendorsFromDb: Vendor[] = []
-    public materialsFromDb: Material[] = []
-    public deviceMaterialsFromDb: DeviceMaterial[] = []
+    public devicePartsFromDb: VwDeviceMaterial[] = []
     public materialAttributesFromDb: MaterialAttribute[] = []
     public materialSubTasksFromDb: MaterialSubTask[] = []
     public deviceResolutionStrategiesFromDb: DeviceResolutionStrategy[] = []
@@ -47,13 +45,9 @@ export class DeviceResolver {
                 if (!this.vendorsFromDb || this.vendorsFromDb.length <= 0) {
                     this.vendorsFromDb = await this.sqldb.getVendors()
                 }
-                // Load Materials
-                if (!this.materialsFromDb || this.materialsFromDb.length <= 0) {
-                    this.materialsFromDb = await this.sqldb.getMaterials()
-                }
-                // Load Device Materials
-                if (!this.deviceMaterialsFromDb || this.deviceMaterialsFromDb.length <= 0) {
-                    this.deviceMaterialsFromDb = await this.sqldb.getDeviceMaterials()
+                // Load device part snapshots through the compatibility view.
+                if (!this.devicePartsFromDb || this.devicePartsFromDb.length <= 0) {
+                    this.devicePartsFromDb = await this.sqldb.getVwDeviceMaterials()
                 }
                 // Load Material Attributes
                 if (!this.materialAttributesFromDb || this.materialAttributesFromDb.length <= 0) {
@@ -152,26 +146,11 @@ export class DeviceResolver {
                         speakerAddress: selectedDevice.speakerAddress,
                         fwTeamId: fwTeam.id
                 }
-                // resolve this device product list
-                const deviceMaterialsTest = this.deviceMaterialsFromDb.filter(s => s.deviceId===selectedDevice.deviceId)
-                if (deviceMaterialsTest && deviceMaterialsTest.length > 0) {
-                    // We found records, load from materials repo
-                    deviceMaterialsTest.forEach((deviceMaterial: DeviceMaterial) => {
-                        const materialTest = this.materialsFromDb.find(s => s.materialId===deviceMaterial.materialId)
-                        if (materialTest) {
-                            resolvedDevice.materials.push(materialTest)
-                        } else {
-                            console.warn(`Unable to locate material id ${deviceMaterial.materialId} for device ${selectedDevice.name}`)
-                        }
-                    })
-                } else {
-                    // There were no device material records found. Default to use device part number
-                    const materialByPartAndVendor = this.materialsFromDb.find((s: Material) => s.partNumber===selectedDevice.partNumber && s.vendorId===selectedDevice.vendorId)
-                    if (materialByPartAndVendor) {
-                        resolvedDevice.materials.push(materialByPartAndVendor)
-                    } else {
-                        console.warn(`Unable to set default material to match device id ${selectedDevice.name} for part number ${selectedDevice.partNumber} and vendor id ${selectedDevice.vendorId}`)
-                    }
+                const deviceParts = this.devicePartsFromDb.filter(s => s.deviceId===selectedDevice.deviceId)
+                if (deviceParts && deviceParts.length > 0) {
+                    resolvedDevice.materials.push(...deviceParts)
+                } else if (selectedDevice.partNumber) {
+                    console.warn(`Unable to set default linked part snapshot for device ${selectedDevice.name} and part number ${selectedDevice.partNumber}`)
                 }
 
                 this.deviceCache.push(resolvedDevice)

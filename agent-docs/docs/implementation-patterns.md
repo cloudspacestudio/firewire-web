@@ -79,6 +79,7 @@ Treat uploaded files, device media, project document library files, floorplan fi
 - Store file bytes in Azure Blob Storage through `AzureBlobDocumentStorage`.
 - Store only metadata, blob container names, and blob names in SQL/workspace JSON.
 - Include stable IDs, original filename, MIME type, byte size, upload timestamp, uploaded-by identity, `blobContainerName`, and `blobName` in metadata.
+- Keep user-editable display labels separate from physical storage identity. A field such as floorplan `name` may be edited freely and should flow to UI/report/takeoff labels, but blob lookup, upload-version matching, download filenames, and delete operations must use stable IDs plus original/source filename/blob metadata instead of the editable label.
 - Sanitize path segments and header filenames with existing Firewire helpers before writing blob names or response headers.
 - Expose upload/list/delete endpoints plus a content endpoint that streams bytes back from blob storage.
 - Let the content endpoint support inline preview and attachment download, usually by accepting `disposition=attachment` for downloads and defaulting to `inline` for preview.

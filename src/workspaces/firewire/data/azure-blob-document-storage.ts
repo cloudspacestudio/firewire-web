@@ -43,6 +43,15 @@ export class AzureBlobDocumentStorage {
         }
     }
 
+    async listBlobNamesByPrefix(containerName: string, prefix: string): Promise<string[]> {
+        const container = await this.getContainer(containerName)
+        const blobNames: string[] = []
+        for await (const blob of container.listBlobsFlat({ prefix })) {
+            blobNames.push(blob.name)
+        }
+        return blobNames
+    }
+
     async deleteIfExists(containerName: string, blobName: string): Promise<boolean> {
         const container = await this.getContainer(containerName)
         const blockBlob = container.getBlockBlobClient(blobName)

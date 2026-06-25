@@ -1,7 +1,6 @@
 import * as express from 'express'
 import * as mssql from 'mssql'
 import { Device } from './device';
-import { Category } from './category';
 import { Vendor } from './vendor';
 import { Material } from './material';
 import { DeviceMaterial } from './devicematerial';
@@ -22,6 +21,7 @@ import { DeviceVendorLinkIgnore } from './deviceVendorLinkIgnore';
 import { DeviceSet } from './deviceSet';
 import { DeviceSetDevice } from './deviceSetDevice';
 import { WorkspaceStorageRecord } from './workspaceStorage';
+import { DevicePart } from './devicepart';
 import { randomUUID } from 'node:crypto';
 
 export class SqlDb {
@@ -39,10 +39,6 @@ export class SqlDb {
     public async getVwDevices(): Promise<VwDevice[]> {
         await this.ensureDeviceMaterialTextSchema()
         return this._getMany<VwDevice>('vwDevices')
-    }
-    public async getCategories(): Promise<Category[]> {
-        await this.ensureCategorySchema()
-        return this._getMany<Category>('categories')
     }
     public async getVendors(): Promise<Vendor[]> {
         await this.ensureVendorImportSchema()
@@ -161,6 +157,7 @@ export class SqlDb {
         return this._getMany<VwMaterial>('vwMaterials')
     }
     public async getVwDeviceMaterials(): Promise<VwDeviceMaterial[]> {
+        await this.ensureDeviceMaterialTextSchema()
         return this._getMany<VwDeviceMaterial>('vwDeviceMaterials')
     }
     public async getDeviceMaterials(): Promise<DeviceMaterial[]> {
@@ -302,83 +299,6 @@ export class SqlDb {
                 return reject(err)
             }
         })
-    }
-    public async createCategory(input: Category): Promise<boolean> {
-        return new Promise(async(resolve, reject) => {
-            try {
-                await this.ensureCategorySchema()
-                const sql = this.app.locals.sqlserver
-                const createBy = this._escapeSql(String(input.createby || 'system'))
-                const updateBy = this._escapeSql(String(input.updateby || input.createby || 'system'))
-                const result = await sql.query(`INSERT INTO categories(
-                    name, shortName, handle, defaultLabor, includeOnFloorplan, slcAddress, speakerAddress, strobeAddress, createby, updateby
-                )
-                VALUES(
-                    '${this._escapeSql(input.name)}',
-                    '${this._escapeSql(input.shortName)}',
-                    '${this._escapeSql(input.handle)}',
-                    ${typeof input.defaultLabor === 'number' && Number.isFinite(input.defaultLabor) ? Number(input.defaultLabor) : 'NULL'},
-                    ${input.includeOnFloorplan ? 1 : 0},
-                    ${input.slcAddress ? `N'${this._escapeSql(String(input.slcAddress))}'` : 'NULL'},
-                    ${input.speakerAddress ? `N'${this._escapeSql(String(input.speakerAddress))}'` : 'NULL'},
-                    ${input.strobeAddress ? `N'${this._escapeSql(String(input.strobeAddress))}'` : 'NULL'},
-                    '${createBy}',
-                    '${updateBy}'
-                )`)
-                this.app.locals.categories = null
-                return resolve(true)
-            } catch (err) {
-                console.error(err)
-                return reject(err)
-            }
-        })
-
-    }
-    public async updateCategory(input: Category): Promise<boolean> {
-        return new Promise(async(resolve, reject) => {
-            try {
-                await this.ensureCategorySchema()
-                const sql = this.app.locals.sqlserver
-                await sql.query(`UPDATE categories
-                    SET [name]='${this._escapeSql(input.name)}',
-                        [shortName]='${this._escapeSql(input.shortName)}',
-                        [handle]='${this._escapeSql(input.handle)}',
-                        [defaultLabor]=${typeof input.defaultLabor === 'number' && Number.isFinite(input.defaultLabor) ? Number(input.defaultLabor) : 'NULL'},
-                        [includeOnFloorplan]=${input.includeOnFloorplan ? 1 : 0},
-                        [slcAddress]=${input.slcAddress ? `N'${this._escapeSql(String(input.slcAddress))}'` : 'NULL'},
-                        [speakerAddress]=${input.speakerAddress ? `N'${this._escapeSql(String(input.speakerAddress))}'` : 'NULL'},
-                        [strobeAddress]=${input.strobeAddress ? `N'${this._escapeSql(String(input.strobeAddress))}'` : 'NULL'},
-                        [updateat]=GETDATE(),
-                        [updateby]='${this._escapeSql(String(input.updateby || 'system'))}'
-                    WHERE [categoryId]='${this._escapeSql(input.categoryId)}'`)
-                this.app.locals.categories = null
-                return resolve(true)
-            } catch (err) {
-                console.error(err)
-                return reject(err)
-            }
-        })
-    }
-    public async deleteCategory(categoryId: string): Promise<boolean> {
-        return new Promise(async(resolve, reject) => {
-            try {
-                const sql = this.app.locals.sqlserver
-                await sql.query(`DELETE FROM categories WHERE [categoryId]='${this._escapeSql(categoryId)}'`)
-                this.app.locals.categories = null
-                return resolve(true)
-            } catch (err) {
-                console.error(err)
-                return reject(err)
-            }
-        })
-    }
-    public async getCategoryByHandle(handle: string): Promise<Category|null> {
-        await this.ensureCategorySchema()
-        return this._getOne<Category>('categories', `handle='${handle}'`)
-    }
-    public async getCategoryById(categoryId: string): Promise<Category|null> {
-        await this.ensureCategorySchema()
-        return this._getOne<Category>('categories', `[categoryId]='${this._escapeSql(categoryId)}'`)
     }
     public async createMaterial(input: Material): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
@@ -670,6 +590,90 @@ export class SqlDb {
     public async getDeviceByVendorAndPartNumber(vendorId: string, partNumber: string): Promise<Device|null> {
         return this._getOne<Device>('devices', `vendorId='${this._escapeSql(vendorId)}' AND partNumber='${this._escapeSql(partNumber)}'`)
     }
+    public async getDevicePartsByDeviceId(deviceId: string): Promise<DevicePart[]> {
+        await this.ensureDeviceMaterialTextSchema()
+        return this._getMany<DevicePart>('deviceParts', `[deviceId]='${this._escapeSql(deviceId)}'`, '[sortOrder] ASC, [createat] ASC')
+    }
+    public async replaceDeviceParts(deviceId: string, parts: Array<Partial<DevicePart>>, updatedBy: string = 'system'): Promise<boolean> {
+        return new Promise(async(resolve, reject) => {
+            try {
+                await this.ensureDeviceMaterialTextSchema()
+                const sql = this.app.locals.sqlserver
+                const pool = await sql.init()
+                const tx = new mssql.Transaction(pool)
+                await tx.begin()
+                try {
+                    await new mssql.Request(tx)
+                        .input('deviceId', mssql.UniqueIdentifier, deviceId)
+                        .query('DELETE FROM dbo.deviceParts WHERE deviceId = @deviceId')
+                    for (let index = 0; index < parts.length; index++) {
+                        const part = parts[index] || {}
+                        const quantityPerDevice = Math.max(1, Math.floor(Number(part.quantityPerDevice || 1)))
+                        await new mssql.Request(tx)
+                            .input('devicePartId', mssql.UniqueIdentifier, part.devicePartId || randomUUID())
+                            .input('deviceId', mssql.UniqueIdentifier, deviceId)
+                            .input('partId', mssql.UniqueIdentifier, part.partId || null)
+                            .input('vendorId', mssql.UniqueIdentifier, part.vendorId || null)
+                            .input('partNumber', mssql.NVarChar(120), String(part.partNumber || '').trim())
+                            .input('description', mssql.NVarChar(2000), String(part.description || '').trim())
+                            .input('parentCategory', mssql.NVarChar(500), String(part.parentCategory || '').trim())
+                            .input('category', mssql.NVarChar(500), String(part.category || '').trim())
+                            .input('msrp', mssql.Money, part.msrp ?? null)
+                            .input('cost', mssql.Money, part.cost ?? 0)
+                            .input('quantityPerDevice', mssql.Int, quantityPerDevice)
+                            .input('sortOrder', mssql.Int, index)
+                            .input('updatedBy', mssql.NVarChar(100), updatedBy)
+                            .query(`
+                                INSERT INTO dbo.deviceParts(
+                                    devicePartId, deviceId, partId, vendorId, partNumber, description, parentCategory, category,
+                                    msrp, cost, quantityPerDevice, sortOrder, createby, updateby
+                                )
+                                VALUES(
+                                    @devicePartId, @deviceId, @partId, @vendorId, @partNumber, @description, @parentCategory, @category,
+                                    @msrp, @cost, @quantityPerDevice, @sortOrder, @updatedBy, @updatedBy
+                                )
+                            `)
+                    }
+                    await tx.commit()
+                } catch (err) {
+                    await tx.rollback()
+                    throw err
+                }
+                this.app.locals.deviceParts = null
+                this.app.locals.vwDeviceMaterials = null
+                return resolve(true)
+            } catch (err) {
+                console.error(err)
+                return reject(err)
+            }
+        })
+    }
+    public async createDevicePartFromPart(deviceId: string, part: VwPart, quantityPerDevice: number = 1, createdBy: string = 'system'): Promise<DevicePart|null> {
+        const vendorId = String(part.vendorId || '').trim()
+        const partNumber = String(part.PartNumber || part.partNumber || '').trim()
+        if (!deviceId || !vendorId || !partNumber) {
+            return null
+        }
+        await this.replaceDeviceParts(deviceId, [
+            ...(await this.getDevicePartsByDeviceId(deviceId)),
+            {
+                partId: String(part.partId || '').trim() || null,
+                vendorId,
+                partNumber,
+                description: String(part.LongDescription || part.description || '').trim(),
+                parentCategory: String(part.ParentCategory || part.parentCategory || '').trim(),
+                category: String(part.Category || part.category || '').trim(),
+                msrp: Number(part.MSRPPrice ?? part.msrp ?? 0),
+                cost: Number(part.SalesPrice ?? part.cost ?? part.MSRPPrice ?? 0),
+                quantityPerDevice: Math.max(1, Math.floor(Number(quantityPerDevice || 1)))
+            }
+        ], createdBy)
+        const rows = await this.getDevicePartsByDeviceId(deviceId)
+        return rows.find((row) =>
+            String(row.vendorId || '').toLowerCase() === vendorId.toLowerCase() &&
+            String(row.partNumber || '').toLowerCase() === partNumber.toLowerCase()
+        ) || null
+    }
     public async createDeviceMaterialMap(deviceId: string, materialId: string): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
             try {
@@ -693,9 +697,11 @@ export class SqlDb {
     public async deleteDeviceMaterialMapsByDeviceId(deviceId: string): Promise<boolean> {
         return new Promise(async(resolve, reject) => {
             try {
+                await this.ensureDeviceMaterialTextSchema()
                 const sql = this.app.locals.sqlserver
-                await sql.query(`DELETE FROM [devicematerials] WHERE [deviceId]='${this._escapeSql(deviceId)}'`)
+                await sql.query(`DELETE FROM [deviceParts] WHERE [deviceId]='${this._escapeSql(deviceId)}'`)
                 this.app.locals.devicematerials = null
+                this.app.locals.deviceParts = null
                 this.app.locals.vwDeviceMaterials = null
                 return resolve(true)
             } catch (err) {
@@ -705,6 +711,7 @@ export class SqlDb {
         })
     }
     public async getDeviceMaterialByDeviceId(deviceId: string): Promise<VwDeviceMaterial[]|null> {
+        await this.ensureDeviceMaterialTextSchema()
         return this._getMany<VwDeviceMaterial>('vwDeviceMaterials', `deviceId='${this._escapeSql(deviceId)}'`)
     }
     public async getDeviceMaterialByIds(deviceId: string, materialId: string): Promise<DeviceMaterial|null> {
@@ -1251,15 +1258,6 @@ export class SqlDb {
                 BEGIN
                     ALTER TABLE dbo.devices ADD [includeOnFloorplan] BIT NOT NULL CONSTRAINT [DF_devices_includeOnFloorplan_runtime] DEFAULT ((0))
                 END
-                IF COL_LENGTH('dbo.devices', 'categoryId') IS NOT NULL AND OBJECT_ID('dbo.categories', 'U') IS NOT NULL
-                BEGIN
-                    EXEC(N'UPDATE dbo.devices
-                        SET categoryName = COALESCE(NULLIF(dbo.devices.categoryName, ''''), dbo.categories.shortName, dbo.categories.name)
-                        FROM dbo.devices
-                        INNER JOIN dbo.categories ON dbo.devices.categoryId = dbo.categories.categoryId
-                        WHERE NULLIF(dbo.devices.categoryName, '''') IS NULL')
-                END
-
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'name' AND max_length < 1000)
                     ALTER TABLE dbo.devices ALTER COLUMN [name] NVARCHAR(500) NOT NULL
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'shortName' AND max_length < 400)
@@ -1276,8 +1274,51 @@ export class SqlDb {
                     ALTER TABLE dbo.devices ALTER COLUMN [strobeAddress] NVARCHAR(100) NULL
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'speakerAddress' AND max_length < 200)
                     ALTER TABLE dbo.devices ALTER COLUMN [speakerAddress] NVARCHAR(100) NULL
-                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'categoryId' AND is_nullable = 0)
-                    ALTER TABLE dbo.devices ALTER COLUMN [categoryId] NVARCHAR(40) NULL
+            END
+
+            IF OBJECT_ID('dbo.deviceParts', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.deviceParts (
+                    [devicePartId] UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_deviceParts_devicePartId_runtime] DEFAULT NEWID(),
+                    [deviceId] UNIQUEIDENTIFIER NOT NULL,
+                    [partId] UNIQUEIDENTIFIER NULL,
+                    [vendorId] UNIQUEIDENTIFIER NOT NULL,
+                    [partNumber] NVARCHAR(120) NOT NULL,
+                    [description] NVARCHAR(2000) NULL,
+                    [parentCategory] NVARCHAR(500) NULL,
+                    [category] NVARCHAR(500) NULL,
+                    [msrp] MONEY NULL,
+                    [cost] MONEY NULL,
+                    [quantityPerDevice] INT NOT NULL CONSTRAINT [DF_deviceParts_quantityPerDevice_runtime] DEFAULT ((1)),
+                    [sortOrder] INT NOT NULL CONSTRAINT [DF_deviceParts_sortOrder_runtime] DEFAULT ((0)),
+                    [createat] DATETIME NOT NULL CONSTRAINT [DF_deviceParts_createat_runtime] DEFAULT GETDATE(),
+                    [createby] NVARCHAR(100) NOT NULL CONSTRAINT [DF_deviceParts_createby_runtime] DEFAULT ('system'),
+                    [updateat] DATETIME NOT NULL CONSTRAINT [DF_deviceParts_updateat_runtime] DEFAULT GETDATE(),
+                    [updateby] NVARCHAR(100) NOT NULL CONSTRAINT [DF_deviceParts_updateby_runtime] DEFAULT ('system'),
+                    CONSTRAINT [PK_deviceParts_runtime] PRIMARY KEY CLUSTERED ([devicePartId] ASC)
+                )
+            END
+            IF COL_LENGTH('dbo.deviceParts', 'quantityPerDevice') IS NULL
+                ALTER TABLE dbo.deviceParts ADD [quantityPerDevice] INT NOT NULL CONSTRAINT [DF_deviceParts_quantityPerDevice_runtime2] DEFAULT ((1))
+            IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.deviceParts') AND name = 'description' AND max_length < 4000)
+                ALTER TABLE dbo.deviceParts ALTER COLUMN [description] NVARCHAR(2000) NULL
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.check_constraints
+                WHERE [name] = 'CK_deviceParts_quantityPerDevice_positive'
+                    AND parent_object_id = OBJECT_ID('dbo.deviceParts')
+            )
+            BEGIN
+                ALTER TABLE dbo.deviceParts WITH NOCHECK
+                    ADD CONSTRAINT [CK_deviceParts_quantityPerDevice_positive] CHECK ([quantityPerDevice] > 0)
+            END
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.indexes
+                WHERE [name] = 'IX_deviceParts_deviceId'
+                    AND [object_id] = OBJECT_ID('dbo.deviceParts')
+            )
+            BEGIN
+                CREATE NONCLUSTERED INDEX [IX_deviceParts_deviceId]
+                    ON dbo.deviceParts([deviceId] ASC, [sortOrder] ASC)
             END
 
             IF OBJECT_ID('dbo.materials', 'U') IS NOT NULL
@@ -1304,9 +1345,6 @@ export class SqlDb {
                     ALTER TABLE dbo.materials ALTER COLUMN [strobeAddress] NVARCHAR(100) NULL
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'speakerAddress' AND max_length < 200)
                     ALTER TABLE dbo.materials ALTER COLUMN [speakerAddress] NVARCHAR(100) NULL
-                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.materials') AND name = 'categoryId' AND is_nullable = 0)
-                    ALTER TABLE dbo.materials ALTER COLUMN [categoryId] NVARCHAR(40) NULL
-
                 IF OBJECT_ID('dbo.parts', 'U') IS NOT NULL
                 BEGIN
                     EXEC(N'UPDATE m
@@ -1348,63 +1386,37 @@ export class SqlDb {
 
             EXEC(N'CREATE OR ALTER VIEW [dbo].[vwDeviceMaterials]
                 AS
-                SELECT dbo.devices.deviceId,
+                SELECT dbo.deviceParts.devicePartId,
+                    dbo.deviceParts.partId,
+                    dbo.deviceParts.vendorId,
+                    vendorParts.name AS vendorName,
+                    dbo.deviceParts.parentCategory,
+                    dbo.deviceParts.category,
+                    dbo.deviceParts.quantityPerDevice,
+                    dbo.devices.deviceId,
                     dbo.devices.name AS deviceName,
                     dbo.devices.shortName AS deviceShortName,
                     dbo.devices.partNumber,
                     dbo.devices.link,
                     dbo.devices.cost,
                     dbo.devices.defaultLabor,
-                    dbo.vendors.name AS org,
-                    dbo.materials.materialId,
-                    dbo.materials.name AS materialName,
-                    dbo.materials.shortName AS materialShortName,
-                    dbo.materials.categoryName AS materialCategoryName,
-                    dbo.materials.partNumber AS materialPartNumber,
-                    dbo.materials.link AS materialLink,
-                    dbo.materials.msrp AS materialMsrp,
-                    dbo.materials.cost AS materialCost,
-                    dbo.materials.defaultLabor AS materialDefaultLabor,
+                    vendorParts.name AS org,
+                    CONVERT(NVARCHAR(50), dbo.deviceParts.devicePartId) AS materialId,
+                    dbo.deviceParts.description AS materialName,
+                    dbo.deviceParts.partNumber AS materialShortName,
+                    dbo.deviceParts.category AS materialCategoryName,
+                    dbo.deviceParts.partNumber AS materialPartNumber,
+                    dbo.devices.link AS materialLink,
+                    dbo.deviceParts.msrp AS materialMsrp,
+                    dbo.deviceParts.cost AS materialCost,
+                    dbo.devices.defaultLabor AS materialDefaultLabor,
                     dbo.devices.categoryName AS deviceCategoryName,
                     dbo.devices.categoryName AS deviceCategoryShortName
-                FROM dbo.devicematerials INNER JOIN
-                    dbo.devices ON dbo.devicematerials.deviceId = dbo.devices.deviceId INNER JOIN
-                    dbo.materials ON dbo.devicematerials.materialId = dbo.materials.materialId INNER JOIN
-                    dbo.vendors ON dbo.devices.vendorId = dbo.vendors.vendorId')
+                FROM dbo.deviceParts INNER JOIN
+                    dbo.devices ON dbo.deviceParts.deviceId = dbo.devices.deviceId INNER JOIN
+                    dbo.vendors AS vendorParts ON dbo.deviceParts.vendorId = vendorParts.vendorId')
         `)
         this.app.locals.deviceMaterialTextSchemaEnsured = true
-    }
-    public async ensureCategorySchema(): Promise<void> {
-        const sql = this.app.locals.sqlserver
-        await sql.query(`
-            IF OBJECT_ID('dbo.categories', 'U') IS NULL
-                RETURN
-
-            IF COL_LENGTH('dbo.categories', 'defaultLabor') IS NULL
-            BEGIN
-                ALTER TABLE dbo.categories ADD [defaultLabor] DECIMAL(18, 2) NULL
-            END
-
-            IF COL_LENGTH('dbo.categories', 'includeOnFloorplan') IS NULL
-            BEGIN
-                ALTER TABLE dbo.categories ADD [includeOnFloorplan] BIT NOT NULL CONSTRAINT [DF_categories_includeOnFloorplan_runtime] DEFAULT ((0))
-            END
-
-            IF COL_LENGTH('dbo.categories', 'slcAddress') IS NULL
-            BEGIN
-                ALTER TABLE dbo.categories ADD [slcAddress] NVARCHAR(50) NULL
-            END
-
-            IF COL_LENGTH('dbo.categories', 'speakerAddress') IS NULL
-            BEGIN
-                ALTER TABLE dbo.categories ADD [speakerAddress] NVARCHAR(50) NULL
-            END
-
-            IF COL_LENGTH('dbo.categories', 'strobeAddress') IS NULL
-            BEGIN
-                ALTER TABLE dbo.categories ADD [strobeAddress] NVARCHAR(50) NULL
-            END
-        `)
     }
     public async ensureWorkspaceStorageSchema(): Promise<void> {
         const sql = this.app.locals.sqlserver

@@ -22,6 +22,8 @@ The monorepo contains:
 5. Treat runtime auth config as deployment-owned. Do not assume static Angular environment values are authoritative.
 6. Keep generated/build output out of source edits unless the user explicitly asks for it.
 
+Active transition plan: before changing devices, parts, BOM rows, materials, floorplan symbol relationships, takeoff, or estimate summaries, read `docs/device-parts-bom-snapshot-transition-plan.md`. Remove that plan only after the transition is implemented and the stable domain docs fully describe the final model.
+
 ## Documentation Consistency Rule
 
 Treat these docs as part of the implementation contract. Code and documentation must move together.
@@ -44,7 +46,7 @@ Use `docs/change-checklist.md` as the pre-change and pre-finish checklist.
 - For persisted mutable workspace state, reuse `SqlDb.saveWorkspaceStorage` and `workspaceStorage` if the data is JSON workspace state rather than normalized relational data.
 - For physical project documents, use `AzureBlobDocumentStorage`; SQL/workspace storage should keep metadata and blob pointers, not large file payloads.
 - Angular uses standalone lazy route components, Angular Material, `HttpClient`, and common components/services under `firewire-ui/src/app/common`.
-- Reuse `PageToolbar`, `NavToolbar`, `FirewireBomWorksheetComponent`, `FirewireFloorplansComponent`, `FirewireDocLibraryExplorerComponent`, and existing common services before creating page-local equivalents.
+- Reuse `PageToolbar`, `NavToolbar`, `FirewireBomWorksheetComponent`, `FirewireEstimateSummaryComponent`, `FirewireFloorplansComponent`, `FirewireDocLibraryExplorerComponent`, and existing common services before creating page-local equivalents.
 - For upload/preview/download/delete file workflows, reuse or create common media/document services under `firewire-ui/src/app/common/services`; keep bytes in Azure Blob Storage and keep SQL/workspace records as metadata plus blob references.
 - Data-table focused pages must avoid nested vertical page/table scrolling. Keep filters, criteria, notifications, action headers, and paginator/footer visible in the page frame; only the table data viewport should scroll. Sticky table headers must have opaque backgrounds so rows never bleed through underneath.
 - Pages with filters, sort state, page size, selected criteria, tabs, or other view options that control underlying data must persist the user's latest selections locally and reapply them when the user returns to the page. Use the shared Angular `ViewPreferencesService` with stable namespaced keys instead of page-local `localStorage` access.
@@ -73,6 +75,7 @@ MSAL/auth settings are created at runtime in deployed environments. Future agent
 - `docs/architecture.md`: repo layout, backend boot flow, route registration, Angular structure.
 - `docs/domain-model.md`: tenants, projects, devices, parts/materials, BOMs, floorplans, documents, Fieldwire.
 - `docs/parts-model.md`: master parts table, import flow, routes, and migration notes.
+- `docs/device-parts-bom-snapshot-transition-plan.md`: temporary migration plan for replacing `materials`/`devicematerials` dependencies with device part composition, BOM row snapshots, and BOM-row-based floorplan symbols.
 - `docs/sql-naming-conventions.md`: SQL table/view naming, audit fields, constraints, and compatibility alias rules.
 - `docs/implementation-patterns.md`: conventions for backend, SQL, Angular, storage, and style reuse.
 - `docs/auth-and-runtime-config.md`: Entra/MSAL behavior and runtime config warnings.

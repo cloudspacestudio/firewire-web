@@ -4,7 +4,7 @@
 
 Firewire uses a single master `parts` table for vendor part lists. Do not add vendor-specific part catalog tables, security-part tables, or separate import mechanics for a vendor.
 
-Devices can contain only parts from the master parts list. Device Sets contain devices only. Linked parts shown from Device Sets, devices, BOM lookups, and price refresh flows should read from `parts`/`vwParts`.
+Devices can contain only parts from the master parts list. Device Sets contain devices only. Linked parts shown from devices, device sets, BOM lookups, and price refresh flows should start from `parts`/`vwParts` and then snapshot into `deviceParts` or BOM rows.
 
 ## SQL Shape
 
@@ -55,9 +55,9 @@ Part list category values remain meaningful as imported vendor metadata. When a 
 
 Part numbers are identifiers, never money. Vendor imports must treat part number columns as plain text. If Excel has coerced an identifier into a currency-looking value such as `$30,406,002.00`, import normalization should restore it to `30406002` before storing it in `parts.partNumber`.
 
-Deleting a master part deletes only the vendor-scoped row in `parts`. Devices do not map directly to `parts`; when a part is added to a device, the system creates or reuses a `materials` row and stores the part details there, including point-in-time description, category, `cost`, and `msrp`, then maps the device to that material. Existing device/material/BOM snapshots should not be changed by deleting a master catalog part.
+Deleting a master part deletes only the vendor-scoped row in `parts`. Devices do not directly depend on live `parts` values after composition; when a part is added to a device, the system creates a `deviceParts` snapshot with the part id, vendor id, part number, description, parent category, category, `cost`, `msrp`, and `quantityPerDevice`. Existing `deviceParts` and BOM snapshots should not be changed by deleting a master catalog part.
 
-Device detail vendor-part search is vendor-scoped. The UI should offer an explicit vendor selector, default it to the device's vendor, and search through `GET /api/firewire/vendors/:vendorId/parts`. Category filters in that picker come from the selected vendor's imported part metadata. The current `vwDeviceMaterials` payload does not expose linked material vendor ids, so do not claim to default this picker to the latest linked part vendor unless the backend view is extended to provide that data.
+Device detail vendor-part search is vendor-scoped. The UI should offer an explicit vendor selector, default it to the device's vendor, and search through `GET /api/firewire/vendors/:vendorId/parts`. Category filters in that picker come from the selected vendor's imported part metadata. `vwDeviceMaterials` is now a compatibility view over `deviceParts` and exposes linked vendor ids, part ids, categories, MSRP, cost, and `quantityPerDevice`.
 
 Every vendor can use the default master parts import configuration if no custom config exists. The default accepts CSV and Excel files with these headers: `PART NUMBER`, `DESCRIPTION`, `PARENT CATEGORY`, `CATEGORY`, `MSRP`, `MIN QTY`, `UPC`, and `COST`. Header matching is case-insensitive.
 

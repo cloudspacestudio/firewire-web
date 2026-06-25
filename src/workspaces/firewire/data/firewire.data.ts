@@ -327,6 +327,24 @@ export class FirewireData {
                         : undefined
                     const version = file?.versions?.find((item: any) => item?.id === versionId)
                     if (!file || !version) {
+                        const storage = new AzureBlobDocumentStorage()
+                        if (storage.isConfigured()) {
+                            const blobPrefix = [
+                                'project-doc-library',
+                                FirewireData.sanitizeBlobPathSegment(workspaceKey),
+                                FirewireData.sanitizeBlobPathSegment(fileId),
+                                ''
+                            ].join('/')
+                            const safeVersionId = FirewireData.sanitizeBlobPathSegment(versionId)
+                            const blobNames = await storage.listBlobNamesByPrefix(workspaceKey, blobPrefix)
+                            const blobName = blobNames.find((name) => name.includes(`-${safeVersionId}-`))
+                            if (blobName) {
+                                const result = await storage.download(workspaceKey, blobName)
+                                res.setHeader('Content-Type', result.contentType)
+                                res.setHeader('Content-Disposition', `inline; filename="${FirewireData.escapeHeaderFileName(file?.name || 'document')}"`)
+                                return res.status(200).send(result.buffer)
+                            }
+                        }
                         return res.status(404).json({ message: 'Document version was not found.' })
                     }
 
@@ -476,18 +494,7 @@ export class FirewireData {
                             })
                         }
 
-                        const linkedMaterials = await sqldb.getDeviceMaterialByDeviceId(deviceId) || []
-                        const linkedPartNumbers = linkedMaterials
-                            .map((material) => String(material.materialPartNumber || material.partNumber || '').trim())
-                            .filter(Boolean)
-                        const hasProjectWorksheetReference = await sqldb.isDeviceOrMaterialReferencedByProjectWorksheet({
-                            deviceId,
-                            partNumbers: [
-                                String(existing.partNumber || '').trim(),
-                                ...linkedPartNumbers
-                            ]
-                        })
-
+                        const linkedDeviceParts = await sqldb.getDeviceMaterialByDeviceId(deviceId) || []
                         await sqldb.deleteDeviceMaterialMapsByDeviceId(deviceId)
                         await sqldb.deleteMaterialAttributesByMaterialId(deviceId)
                         await sqldb.deleteMaterialSubTasksByMaterialId(deviceId)
@@ -496,30 +503,12 @@ export class FirewireData {
                         const deletedMediaBlobs = await FirewireData.deleteDeviceMediaWorkspace(sqldb, deviceId)
                         await sqldb.deleteDevice(deviceId)
 
-                        const deletedMaterialIds: string[] = []
-                        const preservedMaterialIds: string[] = []
-                        const cleanupMaterialIds = Array.from(new Set(linkedMaterials
-                            .map((material) => String(material.materialId || '').trim())
-                            .filter(Boolean)))
-
-                        for (const materialId of cleanupMaterialIds) {
-                            const mapCount = await sqldb.getDeviceMaterialMapCountByMaterialId(materialId)
-                            if (mapCount > 0 || hasProjectWorksheetReference) {
-                                preservedMaterialIds.push(materialId)
-                                continue
-                            }
-
-                            await sqldb.deleteMaterialAttributesByMaterialId(materialId)
-                            await sqldb.deleteMaterialSubTasksByMaterialId(materialId)
-                            await sqldb.deleteMaterial(materialId)
-                            deletedMaterialIds.push(materialId)
-                        }
-
                         return res.status(200).json({
                             data: {
                                 deviceId,
-                                deletedMaterialIds,
-                                preservedMaterialIds,
+                                deletedDevicePartIds: linkedDeviceParts
+                                    .map((row: any) => String(row.devicePartId || row.materialId || '').trim())
+                                    .filter(Boolean),
                                 deletedMediaBlobs
                             }
                         })
@@ -703,6 +692,37 @@ export class FirewireData {
                 }
             }
         },
+        // Sync Device Prices From Linked Parts
+        {
+            method: 'post',
+            path: '/api/firewire/devices/:deviceId/sync-part-prices',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const deviceId = String(req.params.deviceId || '').trim()
+                    if (!deviceId) {
+                        return res.status(400).json({
+                            message: 'deviceId is required.'
+                        })
+                    }
+
+                    const sqldb = new SqlDb(req.app)
+                    const result = await FirewireData.syncDevicePartPrices(sqldb, deviceId)
+                    if (!result) {
+                        return res.status(404).json({
+                            message: `Device ${deviceId} not found.`
+                        })
+                    }
+
+                    return res.status(200).json({
+                        data: result
+                    })
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
+            }
+        },
         // Update Device Detail
         {
             method: 'put',
@@ -754,49 +774,40 @@ export class FirewireData {
                             speakerAddress: String(req.body?.device?.speakerAddress || '').trim()
                         })
 
-                        const desiredPartNumbers: string[] = Array.isArray(req.body?.partNumbers)
-                            ? Array.from(new Set(req.body.partNumbers
-                                .map((value: unknown) => String(value || '').trim())
-                                .filter((value: string): value is string => !!value)))
-                            : []
-
-                        const materialIds: string[] = []
-                        for (const partNumber of desiredPartNumbers) {
-                            let material = await sqldb.getMaterialByVendorAndPartNumber(vendorId, partNumber)
-                            if (!material) {
-                                const partRecord = await FirewireData.resolveVendorPartRecord(sqldb, vendor, partNumber)
-                                if (!partRecord) {
-                                    return res.status(400).json({
-                                        message: `Part ${partNumber} does not exist in the configured vendor source for ${vendor.name}.`
-                                    })
-                                }
-                                await sqldb.createMaterial({
-                                    materialId: '',
-                                    name: String(partRecord.LongDescription || partNumber),
-                                    shortName: partNumber,
-                                    vendorId,
-                                    categoryName: String(partRecord.Category || partRecord.ParentCategory || categoryName || '').trim(),
-                                    partNumber,
-                                    link: '',
-                                    msrp: Number(partRecord.MSRPPrice || 0),
-                                    cost: Number(partRecord.SalesPrice || partRecord.MSRPPrice || existing.cost || 0),
-                                    defaultLabor: Number(existing.defaultLabor || 0),
-                                    slcAddress: '',
-                                    serialNumber: '',
-                                    strobeAddress: '',
-                                    speakerAddress: ''
+                        const devicePartsPayload = Array.isArray(req.body?.deviceParts)
+                            ? req.body.deviceParts
+                            : (Array.isArray(req.body?.partNumbers)
+                                ? req.body.partNumbers.map((partNumber: unknown) => ({ partNumber, vendorId }))
+                                : [])
+                        const devicePartSnapshots: any[] = []
+                        const seenDeviceParts = new Set<string>()
+                        for (const rawPart of devicePartsPayload) {
+                            const partNumber = String(rawPart?.partNumber || rawPart?.materialPartNumber || rawPart || '').trim()
+                            const partVendorId = String(rawPart?.vendorId || vendorId || '').trim()
+                            if (!partNumber || !partVendorId) {
+                                continue
+                            }
+                            const dedupeKey = `${partVendorId.toLowerCase()}::${partNumber.toLowerCase()}`
+                            if (seenDeviceParts.has(dedupeKey)) {
+                                continue
+                            }
+                            const partVendor = partVendorId === vendor.vendorId ? vendor : await sqldb.getVendorById(partVendorId)
+                            if (!partVendor) {
+                                return res.status(404).json({
+                                    message: `Vendor ${partVendorId} not found for part ${partNumber}.`
                                 })
-                                material = await sqldb.getMaterialByVendorAndPartNumber(vendorId, partNumber)
                             }
-                            if (material?.materialId) {
-                                materialIds.push(material.materialId)
+                            const partRecord = await FirewireData.resolveVendorPartRecord(sqldb, partVendor, partNumber)
+                            if (!partRecord) {
+                                return res.status(400).json({
+                                    message: `Part ${partNumber} does not exist in the configured vendor source for ${partVendor.name}.`
+                                })
                             }
+                            devicePartSnapshots.push(FirewireData.createDevicePartSnapshotFromPart(partRecord, partVendorId, rawPart?.quantityPerDevice))
+                            seenDeviceParts.add(dedupeKey)
                         }
 
-                        await sqldb.deleteDeviceMaterialMapsByDeviceId(deviceId)
-                        for (const materialId of materialIds) {
-                            await sqldb.createDeviceMaterialMap(deviceId, materialId)
-                        }
+                        await sqldb.replaceDeviceParts(deviceId, devicePartSnapshots, FirewireData.resolveUserId(req))
 
                         await sqldb.deleteMaterialAttributesByMaterialId(deviceId)
                         const attributes = Array.isArray(req.body?.attributes) ? req.body.attributes : []
@@ -1317,27 +1328,19 @@ export class FirewireData {
                 })
             }
         },
-        // Get View Materials
+        // Legacy materials catalog is retired. Device composition now uses deviceParts.
         {
             method: 'get',
             path: '/api/firewire/vwmaterials',
             fx: (req: express.Request, res: express.Response) => {
                 return new Promise(async(resolve, reject) => {
-                    try {
-                        const sqldb: SqlDb = new SqlDb(req.app)
-                        const result = await sqldb.getVwMaterials()
-                        return res.status(200).json({
-                            rows: result
-                        })
-                    } catch (err: Error|any) {
-                        return res.status(500).json({
-                            message: err && err.message ? err.message : err
-                        })
-                    }
+                    return res.status(410).json({
+                        rows: [],
+                        message: 'The legacy materials catalog has been retired. Use parts and device parts.'
+                    })
                 })
             }
         },
-        // Get Categories
         // Get Vendors
         {
             method: 'get',
@@ -2661,30 +2664,45 @@ export class FirewireData {
             }
 
             const candidates = [
-                { partNumber: String(device.partNumber || '').trim(), sourceKind: 'device' as const, sourceLabel: 'Device default part' },
+                {
+                    partNumber: String(device.partNumber || '').trim(),
+                    vendorId: device.vendorId,
+                    vendorName: device.vendorName,
+                    sourceKind: 'device' as const,
+                    sourceLabel: 'Device default part'
+                },
                 ...((materialsByDeviceId.get(device.deviceId) || []).map((row: any) => ({
-                    partNumber: String(row.partNumber || '').trim(),
+                    partNumber: String(row.materialPartNumber || row.partNumber || '').trim(),
+                    vendorId: String(row.vendorId || device.vendorId || '').trim(),
+                    vendorName: String(row.vendorName || device.vendorName || '').trim(),
                     sourceKind: 'material' as const,
-                    sourceLabel: 'Linked material part'
+                    sourceLabel: 'Linked device part'
                 })))
             ].filter((row) => !!row.partNumber)
 
             for (const candidate of candidates) {
-                const exists = await FirewireData.checkVendorPartExists(sqldb, vendor, config, candidate.partNumber)
+                const candidateVendor = vendorById.get(candidate.vendorId) || vendor
+                const resolvedCandidateConfig = candidateVendor.vendorId === vendor.vendorId
+                    ? { config }
+                    : await FirewireData.resolveVendorImportConfig(sqldb, candidateVendor)
+                if (!resolvedCandidateConfig.config) {
+                    continue
+                }
+                const exists = await FirewireData.checkVendorPartExists(sqldb, candidateVendor, resolvedCandidateConfig.config, candidate.partNumber)
                 if (exists) {
                     continue
                 }
                 const ignored = ignores.find((row) =>
                     row.deviceId === device.deviceId &&
-                    row.vendorId === device.vendorId &&
+                    row.vendorId === candidateVendor.vendorId &&
                     row.partNumber === candidate.partNumber &&
                     row.sourceKind === candidate.sourceKind
                 )
                 issues.push({
                     deviceId: device.deviceId,
                     deviceName: device.name,
-                    vendorId: device.vendorId,
-                    vendorName: device.vendorName,
+                    vendorId: candidateVendor.vendorId,
+                    vendorName: candidate.vendorName || candidateVendor.name,
                     partNumber: candidate.partNumber,
                     sourceKind: candidate.sourceKind,
                     sourceLabel: candidate.sourceLabel,
@@ -2716,13 +2734,136 @@ export class FirewireData {
         return null
     }
 
+    private static async syncDevicePartPrices(sqldb: SqlDb, deviceId: string): Promise<{
+        deviceId: string
+        deviceName: string
+        previousCost: number
+        refreshedCost: number
+        updated: boolean
+        missingPartNumbers: string[]
+    } | null> {
+        const device = await sqldb.getDevice(deviceId)
+        if (!device) {
+            return null
+        }
+
+        const linkedDeviceParts = await sqldb.getDeviceMaterialByDeviceId(deviceId) || []
+        const partRows = linkedDeviceParts.length > 0
+            ? linkedDeviceParts.map((row: any) => ({
+                partNumber: String(row.materialPartNumber || row.partNumber || '').trim(),
+                vendorId: String(row.vendorId || device.vendorId || '').trim(),
+                quantityPerDevice: Math.max(1, Math.floor(Number(row.quantityPerDevice || 1))),
+                fallbackCost: Number(row.materialCost || row.cost || 0),
+                snapshot: row
+            }))
+            : [{
+                partNumber: String(device.partNumber || '').trim(),
+                vendorId: String(device.vendorId || '').trim(),
+                quantityPerDevice: 1,
+                fallbackCost: Number(device.cost || 0),
+                snapshot: null
+            }]
+        const filteredPartRows = partRows.filter((row) => row.partNumber && row.vendorId)
+        const missingPartNumbers: string[] = []
+        let refreshedCost = Number(device.cost || 0)
+
+        if (filteredPartRows.length > 0) {
+            let total = 0
+            const refreshedSnapshots: any[] = []
+            for (const partRow of filteredPartRows) {
+                const parts = await sqldb.getPartByVendorAndPartNumber(partRow.vendorId, partRow.partNumber)
+                const part = Array.isArray(parts) && parts.length > 0 ? parts[0] : null
+                if (part) {
+                    const unitCost = FirewireData.resolvePartCost(part)
+                    total += unitCost * partRow.quantityPerDevice
+                    refreshedSnapshots.push(FirewireData.createDevicePartSnapshotFromPart(part, partRow.vendorId, partRow.quantityPerDevice))
+                    continue
+                }
+
+                missingPartNumbers.push(partRow.partNumber)
+                total += partRow.fallbackCost * partRow.quantityPerDevice
+                if (partRow.snapshot) {
+                    refreshedSnapshots.push({
+                        partId: partRow.snapshot.partId || null,
+                        vendorId: partRow.vendorId,
+                        partNumber: partRow.partNumber,
+                        description: partRow.snapshot.materialName || partRow.snapshot.description || '',
+                        parentCategory: partRow.snapshot.parentCategory || '',
+                        category: partRow.snapshot.category || partRow.snapshot.materialCategoryName || '',
+                        msrp: Number(partRow.snapshot.materialMsrp || partRow.snapshot.msrp || 0),
+                        cost: partRow.fallbackCost,
+                        quantityPerDevice: partRow.quantityPerDevice
+                    })
+                }
+            }
+            refreshedCost = Number(total.toFixed(2))
+            if (linkedDeviceParts.length > 0) {
+                await sqldb.replaceDeviceParts(deviceId, refreshedSnapshots, 'system')
+            }
+        }
+
+        const previousCost = Number(device.cost || 0)
+        const updated = Math.abs(previousCost - refreshedCost) >= 0.005
+        if (updated) {
+            await sqldb.updateDevice({
+                deviceId,
+                name: device.name,
+                shortName: device.shortName,
+                vendorId: device.vendorId,
+                categoryName: device.categoryName,
+                includeOnFloorplan: !!device.includeOnFloorplan,
+                partNumber: device.partNumber,
+                link: '',
+                cost: refreshedCost,
+                defaultLabor: Number(device.defaultLabor || 0),
+                laborRate: Number(device.laborRate || 56),
+                slcAddress: device.slcAddress || '',
+                serialNumber: device.serialNumber || '',
+                strobeAddress: device.strobeAddress || '',
+                speakerAddress: device.speakerAddress || ''
+            })
+        }
+
+        return {
+            deviceId,
+            deviceName: device.name,
+            previousCost,
+            refreshedCost,
+            updated,
+            missingPartNumbers
+        }
+    }
+
+    private static resolvePartCost(part: VwPart): number {
+        return Number(part.cost ?? part.SalesPrice ?? part.msrp ?? part.MSRPPrice ?? 0)
+    }
+
+    private static createDevicePartSnapshotFromPart(part: VwPart, vendorId: string, quantityPerDevice: unknown = 1): any {
+        const normalizedQuantity = Math.max(1, Math.floor(Number(quantityPerDevice || 1)))
+        return {
+            partId: String(part.partId || '').trim() || null,
+            vendorId,
+            partNumber: String(part.partNumber || part.PartNumber || '').trim(),
+            description: String(part.description || part.LongDescription || '').trim(),
+            parentCategory: String(part.parentCategory || part.ParentCategory || '').trim(),
+            category: String(part.category || part.Category || '').trim(),
+            msrp: Number(part.msrp ?? part.MSRPPrice ?? 0),
+            cost: FirewireData.resolvePartCost(part),
+            quantityPerDevice: normalizedQuantity
+        }
+    }
+
+    private static normalizePartNumber(partNumber: string | null | undefined): string {
+        return String(partNumber || '').trim().toLowerCase()
+    }
+
     private static async createDeviceFromVendorPart(
         sqldb: SqlDb,
         vendor: Vendor,
         partNumber: string,
         part: VwPart,
         body: any
-    ): Promise<{ device: any, material: any, createdMaterial: boolean }> {
+    ): Promise<{ device: any, material: any, devicePart: any, createdMaterial: boolean, createdDevicePart: boolean }> {
         const name = String(body?.name || '').trim()
         const shortName = String(body?.shortName || '').trim()
         const categoryName = String(body?.categoryName || part?.Category || '').trim()
@@ -2744,32 +2885,7 @@ export class FirewireData {
 
         const safeDeviceName = FirewireData.getSafeDeviceName(name, partNumber)
         const safeShortName = FirewireData.limitText(shortName || partNumber, 50) || partNumber
-        const safeMaterialName = String(part?.LongDescription || '').trim() || partNumber
-        const safeMaterialCategoryName = String(part?.Category || part?.ParentCategory || categoryName || '').trim()
         const defaultLabor = Number(body?.defaultLabor ?? 112)
-
-        let material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
-        let createdMaterial = false
-        if (!material) {
-            await sqldb.createMaterial({
-                materialId: '',
-                name: safeMaterialName,
-                shortName: partNumber,
-                vendorId: vendor.vendorId,
-                categoryName: safeMaterialCategoryName,
-                partNumber,
-                link: '',
-                msrp: Number(part.MSRPPrice || 0),
-                cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                defaultLabor,
-                slcAddress: '',
-                serialNumber: '',
-                strobeAddress: '',
-                speakerAddress: ''
-            })
-            material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
-            createdMaterial = true
-        }
 
         await sqldb.createDevice({
             deviceId: '',
@@ -2793,14 +2909,17 @@ export class FirewireData {
             throw new Error('Device was created but could not be reloaded.')
         }
 
-        if (material) {
-            const existingMap = await sqldb.getDeviceMaterialByIds(device.deviceId, material.materialId)
-            if (!existingMap) {
-                await sqldb.createDeviceMaterialMap(device.deviceId, material.materialId)
-            }
-        }
+        const snapshot = FirewireData.createDevicePartSnapshotFromPart(part, vendor.vendorId, 1)
+        await sqldb.replaceDeviceParts(device.deviceId, [snapshot], 'system')
+        const [devicePart] = await sqldb.getDevicePartsByDeviceId(device.deviceId)
 
-        return { device, material, createdMaterial }
+        return {
+            device,
+            material: devicePart || snapshot,
+            devicePart: devicePart || snapshot,
+            createdMaterial: false,
+            createdDevicePart: !!devicePart
+        }
     }
 
     private static async addVendorPartToExistingDevice(
@@ -2809,7 +2928,7 @@ export class FirewireData {
         partNumber: string,
         part: VwPart,
         deviceId: string
-    ): Promise<{ device: any, material: any, createdMaterial: boolean, createdMap: boolean }> {
+    ): Promise<{ device: any, material: any, devicePart: any, createdMaterial: boolean, createdMap: boolean }> {
         if (!partNumber || !deviceId) {
             const error: any = new Error('partNumber and deviceId are required.')
             error.status = 400
@@ -2823,40 +2942,29 @@ export class FirewireData {
             throw error
         }
 
-        let material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
-        let createdMaterial = false
-        if (!material) {
-            await sqldb.createMaterial({
-                materialId: '',
-                name: part.LongDescription || device.name,
-                shortName: partNumber,
-                vendorId: vendor.vendorId,
-                categoryName: String(part.Category || part.ParentCategory || device.categoryName || '').trim(),
-                partNumber,
-                link: '',
-                msrp: Number(part.MSRPPrice || 0),
-                cost: Number(part.SalesPrice || part.MSRPPrice || 0),
-                defaultLabor: Number(device.defaultLabor || 112),
-                slcAddress: '',
-                serialNumber: '',
-                strobeAddress: '',
-                speakerAddress: ''
-            })
-            material = await sqldb.getMaterialByVendorAndPartNumber(vendor.vendorId, partNumber)
-            createdMaterial = true
+        const existingDeviceParts = await sqldb.getDevicePartsByDeviceId(device.deviceId)
+        const existingDevicePart = existingDeviceParts.find((row) =>
+            String(row.vendorId || '').toLowerCase() === vendor.vendorId.toLowerCase() &&
+            String(row.partNumber || '').trim().toLowerCase() === partNumber.toLowerCase()
+        )
+        if (existingDevicePart) {
+            return {
+                device,
+                material: existingDevicePart,
+                devicePart: existingDevicePart,
+                createdMaterial: false,
+                createdMap: false
+            }
         }
 
-        if (!material) {
-            throw new Error('Material could not be created or loaded.')
+        const devicePart = await sqldb.createDevicePartFromPart(device.deviceId, part, 1, 'system')
+        return {
+            device,
+            material: devicePart,
+            devicePart,
+            createdMaterial: false,
+            createdMap: !!devicePart
         }
-
-        const existingMap = await sqldb.getDeviceMaterialByIds(device.deviceId, material.materialId)
-        if (existingMap) {
-            return { device, material, createdMaterial, createdMap: false }
-        }
-
-        await sqldb.createDeviceMaterialMap(device.deviceId, material.materialId)
-        return { device, material, createdMaterial, createdMap: true }
     }
 
     private static limitText(value: string, maxLength: number): string {

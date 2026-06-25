@@ -68,7 +68,7 @@ This is a living list of drift, risks, and consolidation opportunities. It is no
 
 6. BOM snapshot contract.
 
-   Document and test the rule that BOM material rows preserve point-in-time device/part costs.
+   Document and test the rule that BOM rows preserve point-in-time device data and hidden `bomRowParts` preserve the device-part cost snapshots used to produce that row.
 
 7. Runtime auth config verification.
 

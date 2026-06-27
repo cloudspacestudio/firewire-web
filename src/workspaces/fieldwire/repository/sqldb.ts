@@ -34,11 +34,140 @@ export class SqlDb {
     }
     public async getDevice(deviceId: string): Promise<VwDevice|null> {
         await this.ensureDeviceMaterialTextSchema()
+        await this.ensureDeviceIconSchema()
         return this._getOne<VwDevice>('vwDevices', `deviceId='${deviceId}'`)
     }
     public async getVwDevices(): Promise<VwDevice[]> {
         await this.ensureDeviceMaterialTextSchema()
+        await this.ensureDeviceIconSchema()
         return this._getMany<VwDevice>('vwDevices')
+    }
+    public async getDeviceIconGroups(): Promise<any[]> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const result = await sql.query(`
+            SELECT g.iconGroupId, g.name, g.sortOrder, g.createat, g.updateat,
+                i.iconId, i.label, i.fileName, i.mimeType, i.dataUrl, i.sortOrder AS iconSortOrder, i.createat AS iconCreateat, i.updateat AS iconUpdateat
+            FROM dbo.deviceIconGroups g
+            LEFT JOIN dbo.deviceIcons i ON g.iconGroupId = i.iconGroupId
+            ORDER BY g.sortOrder ASC, g.name ASC, i.sortOrder ASC, i.label ASC
+        `)
+        const groups = new Map<string, any>()
+        for (const row of result.recordset || []) {
+            const groupId = String(row.iconGroupId || '')
+            if (!groups.has(groupId)) {
+                groups.set(groupId, {
+                    iconGroupId: groupId,
+                    name: row.name || '',
+                    sortOrder: Number(row.sortOrder || 0),
+                    createat: row.createat,
+                    updateat: row.updateat,
+                    icons: []
+                })
+            }
+            if (row.iconId) {
+                groups.get(groupId).icons.push({
+                    iconId: String(row.iconId),
+                    iconGroupId: groupId,
+                    label: row.label || '',
+                    fileName: row.fileName || '',
+                    mimeType: row.mimeType || '',
+                    dataUrl: row.dataUrl || '',
+                    sortOrder: Number(row.iconSortOrder || 0),
+                    createat: row.iconCreateat,
+                    updateat: row.iconUpdateat
+                })
+            }
+        }
+        return [...groups.values()]
+    }
+    public async createDeviceIconGroup(name: string): Promise<string> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        const iconGroupId = randomUUID()
+        await pool.request()
+            .input('iconGroupId', mssql.UniqueIdentifier, iconGroupId)
+            .input('name', mssql.NVarChar(200), String(name || '').trim())
+            .query(`INSERT INTO dbo.deviceIconGroups(iconGroupId, name) VALUES(@iconGroupId, @name)`)
+        return iconGroupId
+    }
+    public async updateDeviceIconGroup(iconGroupId: string, name: string): Promise<boolean> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        await pool.request()
+            .input('iconGroupId', mssql.UniqueIdentifier, iconGroupId)
+            .input('name', mssql.NVarChar(200), String(name || '').trim())
+            .query(`UPDATE dbo.deviceIconGroups SET name=@name, updateat=GETDATE(), updateby='system' WHERE iconGroupId=@iconGroupId`)
+        return true
+    }
+    public async deleteDeviceIconGroup(iconGroupId: string): Promise<boolean> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        await pool.request()
+            .input('iconGroupId', mssql.UniqueIdentifier, iconGroupId)
+            .query(`
+                UPDATE dbo.devices SET iconId=NULL WHERE iconId IN (SELECT iconId FROM dbo.deviceIcons WHERE iconGroupId=@iconGroupId)
+                DELETE FROM dbo.deviceIcons WHERE iconGroupId=@iconGroupId
+                DELETE FROM dbo.deviceIconGroups WHERE iconGroupId=@iconGroupId
+            `)
+        this.app.locals.devices = null
+        this.app.locals.vwDevices = null
+        return true
+    }
+    public async createDeviceIcon(input: { iconGroupId: string, label: string, fileName: string, mimeType: string, dataUrl: string }): Promise<string> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        const iconId = randomUUID()
+        await pool.request()
+            .input('iconId', mssql.UniqueIdentifier, iconId)
+            .input('iconGroupId', mssql.UniqueIdentifier, input.iconGroupId)
+            .input('label', mssql.NVarChar(200), String(input.label || '').trim())
+            .input('fileName', mssql.NVarChar(260), String(input.fileName || '').trim())
+            .input('mimeType', mssql.NVarChar(120), String(input.mimeType || '').trim())
+            .input('dataUrl', mssql.NVarChar(mssql.MAX), String(input.dataUrl || ''))
+            .query(`INSERT INTO dbo.deviceIcons(iconId, iconGroupId, label, fileName, mimeType, dataUrl) VALUES(@iconId, @iconGroupId, @label, @fileName, @mimeType, @dataUrl)`)
+        return iconId
+    }
+    public async updateDeviceIcon(input: { iconId: string, label?: string, fileName?: string, mimeType?: string, dataUrl?: string }): Promise<boolean> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        await pool.request()
+            .input('iconId', mssql.UniqueIdentifier, input.iconId)
+            .input('label', mssql.NVarChar(200), typeof input.label === 'string' ? input.label.trim() : null)
+            .input('fileName', mssql.NVarChar(260), typeof input.fileName === 'string' ? input.fileName.trim() : null)
+            .input('mimeType', mssql.NVarChar(120), typeof input.mimeType === 'string' ? input.mimeType.trim() : null)
+            .input('dataUrl', mssql.NVarChar(mssql.MAX), typeof input.dataUrl === 'string' ? input.dataUrl : null)
+            .query(`
+                UPDATE dbo.deviceIcons
+                SET label=COALESCE(@label, label),
+                    fileName=COALESCE(@fileName, fileName),
+                    mimeType=COALESCE(@mimeType, mimeType),
+                    dataUrl=COALESCE(@dataUrl, dataUrl),
+                    updateat=GETDATE(),
+                    updateby='system'
+                WHERE iconId=@iconId
+            `)
+        this.app.locals.vwDevices = null
+        return true
+    }
+    public async deleteDeviceIcon(iconId: string): Promise<boolean> {
+        await this.ensureDeviceIconSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        await pool.request()
+            .input('iconId', mssql.UniqueIdentifier, iconId)
+            .query(`
+                UPDATE dbo.devices SET iconId=NULL WHERE iconId=@iconId
+                DELETE FROM dbo.deviceIcons WHERE iconId=@iconId
+            `)
+        this.app.locals.devices = null
+        this.app.locals.vwDevices = null
+        return true
     }
     public async getVendors(): Promise<Vendor[]> {
         await this.ensureVendorImportSchema()
@@ -342,6 +471,8 @@ export class SqlDb {
                         [cost]=${Number(input.cost || 0)},
                         [defaultLabor]=${Number(input.defaultLabor || 0)},
                         [laborRate]=${Number(input.laborRate || 56)},
+                        [iconId]=${this._toSqlValue(input.iconId || null)},
+                        [iconForegroundColor]=${this._toSqlValue(this._truncateSqlString(input.iconForegroundColor || '', 40) || null)},
                         [slcAddress]=N'${this._escapeSql(this._truncateSqlString(input.slcAddress || '', 100))}',
                         [serialNumber]=N'${this._escapeSql(this._truncateSqlString(input.serialNumber || '', 100))}',
                         [strobeAddress]=N'${this._escapeSql(this._truncateSqlString(input.strobeAddress || '', 100))}',
@@ -430,12 +561,12 @@ export class SqlDb {
                 const sql = this.app.locals.sqlserver
                 const result = await sql.query(`INSERT INTO devices(
                     name, shortName, vendorId, categoryName, includeOnFloorplan,
-                    partNumber, link, cost, defaultLabor, laborRate,
+                    partNumber, link, cost, defaultLabor, laborRate, iconId, iconForegroundColor,
                     slcAddress, serialNumber, strobeAddress, speakerAddress
                 )
                 VALUES(
                     ${this._toSqlValue(this._truncateSqlString(input.name, 500))}, ${this._toSqlValue(this._truncateSqlString(input.shortName || '', 200))}, '${this._escapeSql(input.vendorId)}', ${this._toSqlValue(this._truncateSqlString(input.categoryName || '', 500))}, ${input.includeOnFloorplan ? 1 : 0},
-                    ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)}, ${Number(input.laborRate || 56)},
+                    ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)}, ${Number(input.laborRate || 56)}, ${this._toSqlValue(input.iconId || null)}, ${this._toSqlValue(this._truncateSqlString(input.iconForegroundColor || '', 40) || null)},
                     ${this._toSqlValue(this._truncateSqlString(input.slcAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.serialNumber || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.strobeAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.speakerAddress || '', 100))}
                 )`)
                 this.app.locals.devices = null
@@ -1237,12 +1368,57 @@ export class SqlDb {
             END
         `)
     }
+    public async ensureDeviceIconSchema(): Promise<void> {
+        if (this.app.locals.deviceIconSchemaEnsured) {
+            return
+        }
+
+        const sql = this.app.locals.sqlserver
+        await sql.query(`
+            IF OBJECT_ID('dbo.deviceIconGroups', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.deviceIconGroups(
+                    [iconGroupId] UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_deviceIconGroups_iconGroupId_runtime] DEFAULT NEWID(),
+                    [name] NVARCHAR(200) NOT NULL,
+                    [sortOrder] INT NOT NULL CONSTRAINT [DF_deviceIconGroups_sortOrder_runtime] DEFAULT ((0)),
+                    [createat] DATETIME NOT NULL CONSTRAINT [DF_deviceIconGroups_createat_runtime] DEFAULT (GETDATE()),
+                    [createby] NVARCHAR(100) NOT NULL CONSTRAINT [DF_deviceIconGroups_createby_runtime] DEFAULT ('system'),
+                    [updateat] DATETIME NOT NULL CONSTRAINT [DF_deviceIconGroups_updateat_runtime] DEFAULT (GETDATE()),
+                    [updateby] NVARCHAR(100) NOT NULL CONSTRAINT [DF_deviceIconGroups_updateby_runtime] DEFAULT ('system'),
+                    CONSTRAINT [PK_deviceIconGroups_runtime] PRIMARY KEY CLUSTERED ([iconGroupId] ASC)
+                )
+            END
+
+            IF OBJECT_ID('dbo.deviceIcons', 'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.deviceIcons(
+                    [iconId] UNIQUEIDENTIFIER NOT NULL CONSTRAINT [DF_deviceIcons_iconId_runtime] DEFAULT NEWID(),
+                    [iconGroupId] UNIQUEIDENTIFIER NOT NULL,
+                    [label] NVARCHAR(200) NOT NULL,
+                    [fileName] NVARCHAR(260) NULL,
+                    [mimeType] NVARCHAR(120) NULL,
+                    [dataUrl] NVARCHAR(MAX) NOT NULL,
+                    [sortOrder] INT NOT NULL CONSTRAINT [DF_deviceIcons_sortOrder_runtime] DEFAULT ((0)),
+                    [createat] DATETIME NOT NULL CONSTRAINT [DF_deviceIcons_createat_runtime] DEFAULT (GETDATE()),
+                    [createby] NVARCHAR(100) NOT NULL CONSTRAINT [DF_deviceIcons_createby_runtime] DEFAULT ('system'),
+                    [updateat] DATETIME NOT NULL CONSTRAINT [DF_deviceIcons_updateat_runtime] DEFAULT (GETDATE()),
+                    [updateby] NVARCHAR(100) NOT NULL CONSTRAINT [DF_deviceIcons_updateby_runtime] DEFAULT ('system'),
+                    CONSTRAINT [PK_deviceIcons_runtime] PRIMARY KEY CLUSTERED ([iconId] ASC)
+                )
+            END
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE [name] = 'IX_deviceIcons_iconGroupId' AND [object_id] = OBJECT_ID('dbo.deviceIcons'))
+                CREATE NONCLUSTERED INDEX [IX_deviceIcons_iconGroupId] ON dbo.deviceIcons([iconGroupId] ASC, [sortOrder] ASC)
+        `)
+        this.app.locals.deviceIconSchemaEnsured = true
+    }
     public async ensureDeviceMaterialTextSchema(): Promise<void> {
         if (this.app.locals.deviceMaterialTextSchemaEnsured) {
             return
         }
 
         const sql = this.app.locals.sqlserver
+        await this.ensureDeviceIconSchema()
         await sql.query(`
             IF OBJECT_ID('dbo.devices', 'U') IS NOT NULL
             BEGIN
@@ -1257,6 +1433,14 @@ export class SqlDb {
                 IF COL_LENGTH('dbo.devices', 'includeOnFloorplan') IS NULL
                 BEGIN
                     ALTER TABLE dbo.devices ADD [includeOnFloorplan] BIT NOT NULL CONSTRAINT [DF_devices_includeOnFloorplan_runtime] DEFAULT ((0))
+                END
+                IF COL_LENGTH('dbo.devices', 'iconId') IS NULL
+                BEGIN
+                    ALTER TABLE dbo.devices ADD [iconId] UNIQUEIDENTIFIER NULL
+                END
+                IF COL_LENGTH('dbo.devices', 'iconForegroundColor') IS NULL
+                BEGIN
+                    ALTER TABLE dbo.devices ADD [iconForegroundColor] NVARCHAR(40) NULL
                 END
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'name' AND max_length < 1000)
                     ALTER TABLE dbo.devices ALTER COLUMN [name] NVARCHAR(500) NOT NULL
@@ -1370,11 +1554,13 @@ export class SqlDb {
             EXEC(N'CREATE OR ALTER VIEW [dbo].[vwDevices]
                 AS
                 SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryName, dbo.devices.includeOnFloorplan, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost,
-                    dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
+                    dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.iconId, dbo.deviceIcons.label AS iconLabel, dbo.deviceIcons.dataUrl AS iconDataUrl, dbo.devices.iconForegroundColor,
+                    dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
                     ISNULL(attributeCounts.attributeCount, 0) AS attributeCount,
                     ISNULL(subTaskCounts.subTaskCount, 0) AS subTaskCount
                 FROM dbo.devices INNER JOIN
                     dbo.vendors ON dbo.devices.vendorId = dbo.vendors.vendorId LEFT OUTER JOIN
+                    dbo.deviceIcons ON dbo.devices.iconId = dbo.deviceIcons.iconId LEFT OUTER JOIN
                     (SELECT materialId, COUNT(*) AS attributeCount FROM dbo.materialAttributes GROUP BY materialId) AS attributeCounts ON dbo.devices.deviceId = attributeCounts.materialId LEFT OUTER JOIN
                     (SELECT materialId, COUNT(*) AS subTaskCount FROM dbo.materialSubTasks GROUP BY materialId) AS subTaskCounts ON dbo.devices.deviceId = subTaskCounts.materialId')
 

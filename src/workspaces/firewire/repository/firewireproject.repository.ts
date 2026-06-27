@@ -23,6 +23,7 @@ export interface FirewireProjectRecord {
     uuid: string
     fieldwireId: string | null
     worksheetData?: any | null
+    activityLog?: FirewireProjectActivityRecord[]
     isManualLocked: boolean
     manualLockedAt: string | null
     manualLockedBy: string | null
@@ -47,6 +48,14 @@ export interface FirewireProjectRecord {
     createdBy: string
     updatedAt: string
     updatedBy: string
+}
+
+export interface FirewireProjectActivityRecord {
+    activityId: string
+    projectId: string
+    summary: string
+    createdAt: string
+    createdBy: string
 }
 
 export interface FirewireProjectInput {
@@ -167,6 +176,14 @@ type SqlTemplateRow = {
     createdBy: string
     updatedAt: Date | string
     updatedBy: string
+}
+
+type SqlProjectActivityRow = {
+    activityId: string
+    projectId: string
+    summary: string
+    createdAt: Date | string
+    createdBy: string
 }
 
 export class FirewireProjectRepository {
@@ -318,6 +335,7 @@ export class FirewireProjectRepository {
 
         const project = this.mapSqlRow(row)
         project.worksheetData = await this.getWorksheetData(projectId)
+        project.activityLog = await this.listProjectActivity(project)
         return project
     }
 
@@ -404,6 +422,8 @@ export class FirewireProjectRepository {
             await this.upsertWorksheetData(projectId, normalized.worksheetData, userId)
         }
 
+        await this.insertProjectActivity(projectId, 'Project created.', userId)
+
         const created = await this.getFirewireProject(projectId)
         if (!created) {
             throw new Error('Created project could not be reloaded.')
@@ -484,6 +504,10 @@ export class FirewireProjectRepository {
             await this.upsertWorksheetData(projectId, normalized.worksheetData, userId)
         }
 
+        const updated = await this.getFirewireProject(projectId)
+        const summary = this.summarizeProjectChanges(existingProject, updated || undefined)
+        await this.insertProjectActivity(projectId, summary, userId)
+
         return this.getFirewireProject(projectId)
     }
 
@@ -509,6 +533,15 @@ export class FirewireProjectRepository {
                 "IF OBJECT_ID(N'dbo.workspaceStorage', N'U') IS NOT NULL",
                 'BEGIN',
                 "    DELETE FROM dbo.workspaceStorage WHERE [area] = N'project-doc-library' AND [workspaceKey] = @workspaceKey;",
+                'END;'
+            ].join('\n'))
+
+        await pool.request()
+            .input('projectId', mssql.UniqueIdentifier, projectId)
+            .query([
+                "IF OBJECT_ID(N'dbo.firewireProjectActivityLog', N'U') IS NOT NULL",
+                'BEGIN',
+                '    DELETE FROM dbo.firewireProjectActivityLog WHERE projectId = @projectId;',
                 'END;'
             ].join('\n'))
 
@@ -546,6 +579,12 @@ export class FirewireProjectRepository {
             return null
         }
 
+        await this.insertProjectActivity(
+            projectId,
+            normalizedFieldwireId ? 'Fieldwire project link updated.' : 'Fieldwire project link removed.',
+            userId
+        )
+
         return this.getFirewireProject(projectId)
     }
 
@@ -577,6 +616,8 @@ export class FirewireProjectRepository {
         if (!result.rowsAffected || result.rowsAffected[0] <= 0) {
             return null
         }
+
+        await this.insertProjectActivity(projectId, isLocked ? 'Manual project lock enabled.' : 'Manual project lock removed.', userId)
 
         return this.getFirewireProject(projectId)
     }
@@ -734,6 +775,22 @@ export class FirewireProjectRepository {
             '    );',
             'END;'
         ].join('\n')
+        const activityQuery = [
+            "IF OBJECT_ID(N'dbo.firewireProjectActivityLog', N'U') IS NULL",
+            'BEGIN',
+            '    CREATE TABLE dbo.firewireProjectActivityLog (',
+            '        activityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_firewireProjectActivityLog PRIMARY KEY,',
+            '        projectId UNIQUEIDENTIFIER NOT NULL,',
+            "        summary NVARCHAR(2000) NOT NULL CONSTRAINT DF_firewireProjectActivityLog_summary DEFAULT N'',",
+            '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectActivityLog_createdAt DEFAULT SYSUTCDATETIME(),',
+            '        createdBy NVARCHAR(256) NOT NULL',
+            '    );',
+            'END;',
+            "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_firewireProjectActivityLog_project_created' AND object_id = OBJECT_ID('dbo.firewireProjectActivityLog'))",
+            'BEGIN',
+            '    CREATE NONCLUSTERED INDEX IX_firewireProjectActivityLog_project_created ON dbo.firewireProjectActivityLog(projectId, createdAt DESC);',
+            'END;'
+        ].join('\n')
         const bomRowPartsQuery = [
             "IF OBJECT_ID(N'dbo.bomRowParts', N'U') IS NULL",
             'BEGIN',
@@ -822,6 +879,7 @@ export class FirewireProjectRepository {
         await pool.request().batch(createQuery)
         await pool.request().batch(worksheetQuery)
         await pool.request().batch(templateQuery)
+        await pool.request().batch(activityQuery)
         await pool.request().batch(bomRowPartsQuery)
         await pool.request().batch(alterQuery)
         await pool.request().batch(backfillProjectTypeQuery)
@@ -1122,6 +1180,7 @@ export class FirewireProjectRepository {
             uuid: row.uuid,
             fieldwireId: row.fieldwireId ? String(row.fieldwireId) : null,
             worksheetData: null,
+            activityLog: [],
             isManualLocked: Boolean(row.isManualLocked),
             manualLockedAt: this.toIso(row.manualLockedAt),
             manualLockedBy: row.manualLockedBy ? String(row.manualLockedBy) : null,
@@ -1149,6 +1208,16 @@ export class FirewireProjectRepository {
         }
     }
 
+    private mapActivityRow(row: SqlProjectActivityRow): FirewireProjectActivityRecord {
+        return {
+            activityId: row.activityId,
+            projectId: row.projectId,
+            summary: row.summary || '',
+            createdAt: this.toIso(row.createdAt) || '',
+            createdBy: row.createdBy || ''
+        }
+    }
+
     private async getWorksheetData(projectId: string): Promise<any | null> {
         const pool = await this.getPool()
         const query = [
@@ -1169,6 +1238,112 @@ export class FirewireProjectRepository {
         } catch {
             return null
         }
+    }
+
+    private async listProjectActivity(project: FirewireProjectRecord): Promise<FirewireProjectActivityRecord[]> {
+        const pool = await this.getPool()
+        const query = [
+            "IF OBJECT_ID(N'dbo.firewireProjectActivityLog', N'U') IS NULL",
+            'BEGIN',
+            '    SELECT TOP 0',
+            '        CAST(NULL AS UNIQUEIDENTIFIER) AS activityId,',
+            '        CAST(NULL AS UNIQUEIDENTIFIER) AS projectId,',
+            "        CAST(N'' AS NVARCHAR(2000)) AS summary,",
+            '        SYSUTCDATETIME() AS createdAt,',
+            "        CAST(N'' AS NVARCHAR(256)) AS createdBy;",
+            'END',
+            'ELSE',
+            'BEGIN',
+            '    SELECT TOP 100 activityId, projectId, summary, createdAt, createdBy',
+            '    FROM dbo.firewireProjectActivityLog',
+            '    WHERE projectId = @projectId',
+            '    ORDER BY createdAt DESC;',
+            'END;'
+        ].join('\n')
+        const result = await pool.request()
+            .input('projectId', mssql.UniqueIdentifier, project.uuid)
+            .query(query)
+        const rows = (result.recordset || []).map((row) => this.mapActivityRow(row))
+        if (rows.length > 0) {
+            return rows
+        }
+
+        const fallback: FirewireProjectActivityRecord[] = []
+        if (project.updatedAt && project.updatedAt !== project.createdAt) {
+            fallback.push({
+                activityId: `${project.uuid}-updated`,
+                projectId: project.uuid,
+                summary: 'Project updated.',
+                createdAt: project.updatedAt,
+                createdBy: project.updatedBy || project.createdBy || ''
+            })
+        }
+        if (project.createdAt) {
+            fallback.push({
+                activityId: `${project.uuid}-created`,
+                projectId: project.uuid,
+                summary: 'Project created.',
+                createdAt: project.createdAt,
+                createdBy: project.createdBy || ''
+            })
+        }
+        return fallback
+    }
+
+    private async insertProjectActivity(projectId: string, summary: string, userId: string): Promise<void> {
+        if (!validateUuid(projectId)) {
+            return
+        }
+        const normalizedSummary = this.optionalString(summary, 2000) || 'Project updated.'
+        const pool = await this.getPool()
+        await pool.request()
+            .input('activityId', mssql.UniqueIdentifier, uuidv4())
+            .input('projectId', mssql.UniqueIdentifier, projectId)
+            .input('summary', mssql.NVarChar(2000), normalizedSummary)
+            .input('createdBy', mssql.NVarChar(256), userId || 'system')
+            .query([
+                "IF OBJECT_ID(N'dbo.firewireProjectActivityLog', N'U') IS NOT NULL",
+                'BEGIN',
+                '    INSERT INTO dbo.firewireProjectActivityLog (activityId, projectId, summary, createdBy)',
+                '    VALUES (@activityId, @projectId, @summary, @createdBy);',
+                'END;'
+            ].join('\n'))
+    }
+
+    private summarizeProjectChanges(before?: FirewireProjectRecord | null, after?: FirewireProjectRecord | null): string {
+        if (!before || !after) {
+            return 'Project updated.'
+        }
+        const changedLabels: string[] = []
+        const comparisons: Array<[keyof FirewireProjectRecord, string]> = [
+            ['name', 'Name'],
+            ['projectNbr', 'Project Number'],
+            ['address', 'Address'],
+            ['bidDueDate', 'Bid Due Date'],
+            ['projectStatus', 'Project Status'],
+            ['projectType', 'Project Type'],
+            ['salesman', 'Salesman'],
+            ['jobType', 'Job Type'],
+            ['scopeType', 'Scope Type'],
+            ['projectScope', 'Project Scope'],
+            ['difficulty', 'Difficulty'],
+            ['totalSqFt', 'Total Sq Ft'],
+            ['fieldwireId', 'Fieldwire Link']
+        ]
+        for (const [key, label] of comparisons) {
+            const beforeValue = key === 'bidDueDate' ? this.toIso(before[key] as any) : String(before[key] ?? '')
+            const afterValue = key === 'bidDueDate' ? this.toIso(after[key] as any) : String(after[key] ?? '')
+            if (beforeValue !== afterValue) {
+                changedLabels.push(label)
+            }
+        }
+        if (before.latitude !== after.latitude || before.longitude !== after.longitude || before.geocodeStatus !== after.geocodeStatus) {
+            changedLabels.push('Location Mapping')
+        }
+        if (changedLabels.length <= 0) {
+            return 'Project saved with no tracked field changes.'
+        }
+        return `${changedLabels.slice(0, 8).join(', ')} changed${changedLabels.length > 8 ? ` and ${changedLabels.length - 8} more` : ''}.`
     }
 
     private async upsertWorksheetData(projectId: string, worksheetData: any, userId: string): Promise<void> {

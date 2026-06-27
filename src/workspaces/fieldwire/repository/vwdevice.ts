@@ -10,6 +10,10 @@ export interface VwDevice {
     cost: number
     defaultLabor: number
     laborRate?: number
+    iconId?: string | null
+    iconLabel?: string | null
+    iconDataUrl?: string | null
+    iconForegroundColor?: string | null
     slcAddress: string
     serialNumber: string
     strobeAddress: string

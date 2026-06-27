@@ -473,6 +473,153 @@ export class FirewireData {
                 })
             }
         },
+        {
+            method: 'get',
+            path: '/api/firewire/device-icons',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const rows = await sqldb.getDeviceIconGroups()
+                        return resolve(res.status(200).json({ rows }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/device-icons/groups',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const name = String(req.body?.name || '').trim()
+                        if (!name) {
+                            return resolve(res.status(400).json({ message: 'Icon group name is required.' }))
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const iconGroupId = await sqldb.createDeviceIconGroup(name)
+                        return resolve(res.status(201).json({ iconGroupId }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
+        {
+            method: 'put',
+            path: '/api/firewire/device-icons/groups/:iconGroupId',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const iconGroupId = String(req.params.iconGroupId || '').trim()
+                        const name = String(req.body?.name || '').trim()
+                        if (!iconGroupId || !name) {
+                            return resolve(res.status(400).json({ message: 'Icon group id and name are required.' }))
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        await sqldb.updateDeviceIconGroup(iconGroupId, name)
+                        return resolve(res.status(200).json({ success: true }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
+        {
+            method: 'delete',
+            path: '/api/firewire/device-icons/groups/:iconGroupId',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const iconGroupId = String(req.params.iconGroupId || '').trim()
+                        if (!iconGroupId) {
+                            return resolve(res.status(400).json({ message: 'Icon group id is required.' }))
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        await sqldb.deleteDeviceIconGroup(iconGroupId)
+                        return resolve(res.status(200).json({ success: true }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/device-icons/groups/:iconGroupId/icons',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const iconGroupId = String(req.params.iconGroupId || '').trim()
+                        const label = String(req.body?.label || '').trim()
+                        const fileName = String(req.body?.fileName || '').trim()
+                        const mimeType = String(req.body?.mimeType || '').trim()
+                        const dataUrl = String(req.body?.dataUrl || '').trim()
+                        if (!iconGroupId || !label || !dataUrl) {
+                            return resolve(res.status(400).json({ message: 'Icon group id, label, and image data are required.' }))
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        const iconId = await sqldb.createDeviceIcon({ iconGroupId, label, fileName, mimeType, dataUrl })
+                        return resolve(res.status(201).json({ iconId }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
+        {
+            method: 'put',
+            path: '/api/firewire/device-icons/icons/:iconId',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const iconId = String(req.params.iconId || '').trim()
+                        if (!iconId) {
+                            return resolve(res.status(400).json({ message: 'Icon id is required.' }))
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        await sqldb.updateDeviceIcon({
+                            iconId,
+                            label: typeof req.body?.label === 'string' ? req.body.label : undefined,
+                            fileName: typeof req.body?.fileName === 'string' ? req.body.fileName : undefined,
+                            mimeType: typeof req.body?.mimeType === 'string' ? req.body.mimeType : undefined,
+                            dataUrl: typeof req.body?.dataUrl === 'string' ? req.body.dataUrl : undefined
+                        })
+                        return resolve(res.status(200).json({ success: true }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
+        {
+            method: 'delete',
+            path: '/api/firewire/device-icons/icons/:iconId',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve) => {
+                    try {
+                        const iconId = String(req.params.iconId || '').trim()
+                        if (!iconId) {
+                            return resolve(res.status(400).json({ message: 'Icon id is required.' }))
+                        }
+                        const sqldb: SqlDb = new SqlDb(req.app)
+                        await sqldb.deleteDeviceIcon(iconId)
+                        return resolve(res.status(200).json({ success: true }))
+                    } catch (err: any) {
+                        console.error(err)
+                        return resolve(res.status(500).json({ message: err?.message || err }))
+                    }
+                })
+            }
+        },
         // Delete Device
         {
             method: 'delete',
@@ -768,6 +915,8 @@ export class FirewireData {
                             cost: Number(req.body?.device?.cost ?? existing.cost ?? 0),
                             defaultLabor: Number(req.body?.device?.defaultLabor ?? existing.defaultLabor ?? 0),
                             laborRate: Number(req.body?.device?.laborRate ?? existing.laborRate ?? 56),
+                            iconId: String(req.body?.device?.iconId ?? existing.iconId ?? '').trim() || null,
+                            iconForegroundColor: String(req.body?.device?.iconForegroundColor ?? existing.iconForegroundColor ?? '#210507').trim() || '#210507',
                             slcAddress: String(req.body?.device?.slcAddress || '').trim(),
                             serialNumber: String(req.body?.device?.serialNumber || '').trim(),
                             strobeAddress: String(req.body?.device?.strobeAddress || '').trim(),
@@ -2817,6 +2966,8 @@ export class FirewireData {
                 cost: refreshedCost,
                 defaultLabor: Number(device.defaultLabor || 0),
                 laborRate: Number(device.laborRate || 56),
+                iconId: device.iconId || null,
+                iconForegroundColor: device.iconForegroundColor || '#210507',
                 slcAddress: device.slcAddress || '',
                 serialNumber: device.serialNumber || '',
                 strobeAddress: device.strobeAddress || '',
@@ -2898,6 +3049,8 @@ export class FirewireData {
             link: '',
             cost: Number(part.SalesPrice || part.MSRPPrice || 0),
             defaultLabor,
+            iconId: null,
+            iconForegroundColor: '#210507',
             slcAddress: '',
             serialNumber: '',
             strobeAddress: '',

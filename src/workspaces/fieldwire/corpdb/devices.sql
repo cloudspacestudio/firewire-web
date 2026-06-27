@@ -10,6 +10,8 @@ CREATE TABLE [dbo].[devices](
 	[cost] [money] NOT NULL,
 	[defaultLabor] [decimal](18, 0) NOT NULL,
 	[laborRate] [decimal](18, 2) NOT NULL,
+	[iconId] [uniqueidentifier] NULL,
+	[iconForegroundColor] [nvarchar](40) NULL,
 	[slcAddress] [nvarchar](50) NULL,
 	[serialNumber] [nvarchar](50) NULL,
 	[strobeAddress] [nvarchar](50) NULL,

@@ -10,6 +10,8 @@ export interface Device {
     cost: number
     defaultLabor: number
     laborRate?: number
+    iconId?: string | null
+    iconForegroundColor?: string | null
     slcAddress: string
     serialNumber: string
     strobeAddress: string

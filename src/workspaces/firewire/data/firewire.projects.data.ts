@@ -214,9 +214,11 @@ export class FirewireProjectsData {
                     const changeOrders = await listProjectChangeOrders(repository, rootProject)
                     const nextVersion = getNextChangeOrderVersion(changeOrders)
                     const versionLabel = nextVersion.toString().padStart(2, '0')
-                    const rootProjectNbr = getRootProjectNumber(rootProject.projectNbr)
+                    const rootProjectNbr = await resolveRootProjectNumber(req.app, rootProject)
                     const rootProjectName = getRootProjectName(rootProject.name)
-                    const worksheetData = buildChangeOrderWorksheetData(rootProject.worksheetData)
+                    const sqldb = new SqlDb(req.app)
+                    const rootDocLibrary = await loadProjectDocLibraryPayload(sqldb, rootProject.uuid)
+                    const worksheetData = buildChangeOrderWorksheetData(rootProject, rootDocLibrary, nextVersion, versionLabel, rootProjectNbr)
                     const created = await repository.createFirewireProject({
                         fieldwireId: null,
                         name: `${rootProjectName} - ${versionLabel}`,
@@ -233,6 +235,8 @@ export class FirewireProjectsData {
                         totalSqFt: rootProject.totalSqFt,
                         worksheetData
                     }, userId)
+
+                    await seedChangeOrderDocLibrary(sqldb, rootProject.uuid, created.uuid, rootDocLibrary, userId)
 
                     return res.status(201).json({
                         data: {
@@ -575,19 +579,36 @@ async function resolveRootFirewireProject(app: express.Application, repository: 
 
 async function listProjectChangeOrders(repository: FirewireProjectRepository, rootProject: FirewireProjectRecord): Promise<FirewireProjectRecord[]> {
     const rootProjectNbr = getRootProjectNumber(rootProject.projectNbr)
-    if (!rootProjectNbr) {
-        return []
-    }
     const allProjects = await repository.listFirewireProjects()
-    const pattern = new RegExp(`^${escapeRegExp(rootProjectNbr)}\\.\\d{2}$`, 'i')
-    return allProjects
-        .filter((project) => project.uuid !== rootProject.uuid && pattern.test(String(project.projectNbr || '').trim()))
-        .sort((left, right) => getChangeOrderVersion(left.projectNbr) - getChangeOrderVersion(right.projectNbr))
+    const pattern = rootProjectNbr
+        ? new RegExp(`^${escapeRegExp(rootProjectNbr)}\\.\\d{2}$`, 'i')
+        : null
+    const probableMatches = allProjects.filter((project) => {
+        if (project.uuid === rootProject.uuid) {
+            return false
+        }
+        if (pattern && pattern.test(String(project.projectNbr || '').trim())) {
+            return true
+        }
+        return true
+    })
+    const hydrated = await Promise.all(probableMatches.map((project) => repository.getFirewireProject(project.uuid)))
+    return hydrated
+        .filter((project): project is FirewireProjectRecord => {
+            if (!project || project.uuid === rootProject.uuid) {
+                return false
+            }
+            if (pattern && pattern.test(String(project.projectNbr || '').trim())) {
+                return true
+            }
+            return String(project.worksheetData?.changeOrderBaseline?.rootProjectId || '').trim().toLowerCase() === rootProject.uuid.toLowerCase()
+        })
+        .sort((left, right) => getChangeOrderVersionFromProject(left) - getChangeOrderVersionFromProject(right))
 }
 
 function getNextChangeOrderVersion(changeOrders: FirewireProjectRecord[]): number {
     const versions = changeOrders
-        .map((project) => getChangeOrderVersion(project.projectNbr))
+        .map((project) => getChangeOrderVersionFromProject(project))
         .filter((version) => Number.isFinite(version) && version > 0)
     return versions.length > 0 ? Math.max(...versions) + 1 : 1
 }
@@ -597,19 +618,117 @@ function getChangeOrderVersion(projectNbr: string): number {
     return match ? Number(match[1]) : 0
 }
 
+function getChangeOrderVersionFromProject(project: FirewireProjectRecord): number {
+    const projectNbrVersion = getChangeOrderVersion(project.projectNbr)
+    if (projectNbrVersion > 0) {
+        return projectNbrVersion
+    }
+    const baselineVersion = Number(project.worksheetData?.changeOrderBaseline?.changeOrderVersion || 0)
+    return Number.isFinite(baselineVersion) ? baselineVersion : 0
+}
+
 function getRootProjectNumber(projectNbr: string): string {
     return String(projectNbr || '').trim().replace(/\.\d{2}$/, '')
+}
+
+async function resolveRootProjectNumber(app: express.Application, rootProject: FirewireProjectRecord): Promise<string> {
+    const firewireProjectNbr = getRootProjectNumber(rootProject.projectNbr)
+    if (firewireProjectNbr) {
+        return firewireProjectNbr
+    }
+
+    const fieldwireId = String(rootProject.fieldwireId || '').trim()
+    if (!fieldwireId) {
+        return ''
+    }
+
+    try {
+        const fieldwire = app.locals.fieldwire as FieldwireSDK
+        const fieldwireProject = await fieldwire.project(fieldwireId)
+        return getRootProjectNumber(String(fieldwireProject?.code || '').trim())
+    } catch {
+        return ''
+    }
 }
 
 function getRootProjectName(name: string): string {
     return String(name || '').trim().replace(/\s+-\s+\d{2}$/, '')
 }
 
-function buildChangeOrderWorksheetData(sourceWorksheetData: any): any {
+function buildChangeOrderWorksheetData(rootProject: FirewireProjectRecord, rootDocLibrary: any, changeOrderVersion: number, versionLabel: string, rootProjectNbr: string): any {
+    const sourceWorksheetData = rootProject?.worksheetData || {}
     const customerInfo = sourceWorksheetData?.customerInfo && typeof sourceWorksheetData.customerInfo === 'object'
         ? JSON.parse(JSON.stringify(sourceWorksheetData.customerInfo))
         : undefined
-    return typeof customerInfo === 'undefined' ? {} : { customerInfo }
+    const reportSettings = sourceWorksheetData?.reportSettings && typeof sourceWorksheetData.reportSettings === 'object'
+        ? JSON.parse(JSON.stringify(sourceWorksheetData.reportSettings))
+        : undefined
+    const floorplanFolders = Array.isArray(sourceWorksheetData?.floorplanFolders)
+        ? JSON.parse(JSON.stringify(sourceWorksheetData.floorplanFolders))
+        : undefined
+    const bomSections = Array.isArray(sourceWorksheetData?.bomSections)
+        ? JSON.parse(JSON.stringify(sourceWorksheetData.bomSections))
+        : []
+    const floorplans = getFirewireFloorplans(rootDocLibrary)
+        .map((file: any) => ({
+            id: file?.id,
+            name: file?.name,
+            sourceFileName: file?.sourceFileName,
+            floorplanFolderId: file?.floorplanFolderId,
+            floorplanDesign: file?.floorplanDesign ? JSON.parse(JSON.stringify(file.floorplanDesign)) : undefined
+        }))
+
+    return {
+        ...(typeof customerInfo === 'undefined' ? {} : { customerInfo }),
+        ...(typeof reportSettings === 'undefined' ? {} : { reportSettings }),
+        ...(typeof floorplanFolders === 'undefined' ? {} : { floorplanFolders }),
+        bomSections: [],
+        changeOrderBaseline: {
+            version: 1,
+            rootProjectId: rootProject.uuid,
+            rootProjectName: rootProject.name,
+            rootProjectNbr: rootProjectNbr || rootProject.projectNbr,
+            changeOrderVersion,
+            changeOrderVersionLabel: versionLabel,
+            capturedAt: new Date().toISOString(),
+            bomSections,
+            floorplanFolders: floorplanFolders || [],
+            floorplans
+        }
+    }
+}
+
+async function seedChangeOrderDocLibrary(sqldb: SqlDb, rootProjectId: string, changeOrderProjectId: string, rootDocLibrary: any, userId: string): Promise<void> {
+    const now = new Date().toISOString()
+    const sourceFiles = getFirewireFloorplans(rootDocLibrary)
+    const files = sourceFiles.map((file: any) => ({
+        ...JSON.parse(JSON.stringify(file)),
+        storageKey: rootProjectId,
+        floorplanDesign: createEmptyChangeOrderFloorplanDesign(file?.floorplanDesign),
+        createdAt: now,
+        updatedAt: now,
+        changeOrderSourceFileId: file?.id,
+        changeOrderSourceProjectId: rootProjectId
+    }))
+    const payload = {
+        files,
+        directories: Array.isArray(rootDocLibrary?.directories)
+            ? JSON.parse(JSON.stringify(rootDocLibrary.directories))
+            : [],
+        editMarkupDocuments: []
+    }
+    await sqldb.saveWorkspaceStorage('project-doc-library', changeOrderProjectId, JSON.stringify(payload), userId)
+}
+
+function createEmptyChangeOrderFloorplanDesign(sourceDesign: any): any {
+    return {
+        annotations: [],
+        circuits: [],
+        calibration: sourceDesign?.calibration ? JSON.parse(JSON.stringify(sourceDesign.calibration)) : undefined,
+        rotationDegrees: Number(sourceDesign?.rotationDegrees || 0),
+        symbolDisplayMode: sourceDesign?.symbolDisplayMode || 'icon',
+        updatedAt: new Date().toISOString()
+    }
 }
 
 function escapeRegExp(value: string): string {
@@ -725,7 +844,9 @@ async function buildFieldwireImportPlan(fieldwire: FieldwireSDK, sqldb: SqlDb, p
         const existingTasks = matchingFloorplan?.id ? (fieldwireFloorplanTasksById.get(String(matchingFloorplan.id)) || []) : []
         const taskPlans = symbols.map((symbol: any) => {
             const taskName = String(symbol.label || symbol.text || symbol.deviceName || symbol.categoryName || 'Symbol').trim()
-            const existingTask = existingTasks.find((task: any) => normalizeLookupKey(task?.name) === normalizeLookupKey(taskName))
+            const existingTask = matchingFloorplanReady
+                ? findExistingFieldwireTaskForSymbol(existingTasks, taskName, matchingFloorplan, symbol)
+                : null
             const status = existingTask ? 'exists' : matchingFloorplan && !matchingFloorplanReady ? 'blocked' : 'required'
             if (status === 'required') {
                 taskCreateCount += 1
@@ -835,9 +956,9 @@ async function executeFieldwireImport(
     if (!fieldwireProject) {
         try {
             const createdProject = await fieldwire.createProject({
-                name: workingProject.name,
-                code: workingProject.projectNbr || undefined,
-                address: workingProject.address || undefined,
+                name: String(workingProject.name || '').trim(),
+                code: String(workingProject.projectNbr || '').trim() || undefined,
+                address: String(workingProject.address || '').trim() || undefined,
                 time_zone: 'America/Chicago'
             })
             fieldwireProject = {
@@ -907,7 +1028,7 @@ async function executeFieldwireImport(
                         results.push({
                             type: 'create-floorplan',
                             label: `Create floorplan ${floorplan.name}`,
-                            status: 'pending',
+                            status: 'skipped',
                             detail: describeFieldwireFloorplanPending(matchingFloorplan)
                         })
                     }
@@ -939,8 +1060,10 @@ async function executeFieldwireImport(
     for (const floorplan of floorplans) {
         let matchingFloorplan = floorplansByFirewireFileId.get(String(floorplan.id))
             || findMatchingFieldwireFloorplan(fieldwireFloorplans as any[], floorplan.name, getFileBaseName(floorplan.name))
+        const symbols = getFloorplanSymbols(floorplan)
+        const createdSymbolIds = new Set<string>()
         if (!matchingFloorplan?.id) {
-            const symbolCount = getFloorplanSymbols(floorplan).length
+            const symbolCount = symbols.length
             if (symbolCount > 0) {
                 results.push({
                     type: 'create-task',
@@ -952,51 +1075,50 @@ async function executeFieldwireImport(
             continue
         }
         if (!isFieldwireFloorplanReady(matchingFloorplan)) {
-            const symbolCount = getFloorplanSymbols(floorplan).length
+            const symbolCount = symbols.length
             if (symbolCount > 0) {
-                results.push({
-                    type: 'create-task',
-                    label: `Create ${symbolCount} task${symbolCount === 1 ? '' : 's'} on ${floorplan.name}`,
-                    status: 'pending',
-                    detail: describeFieldwireFloorplanPending(matchingFloorplan)
-                })
+                const readiness = await waitForFieldwireFloorplanTaskReadiness(
+                    fieldwire,
+                    fieldwireProjectId,
+                    matchingFloorplan,
+                    floorplan,
+                    symbols[0],
+                    taskContext,
+                    symbolFinancials,
+                    results
+                )
+                matchingFloorplan = readiness.floorplan || matchingFloorplan
+                if (readiness.createdSymbolId) {
+                    createdSymbolIds.add(readiness.createdSymbolId)
+                }
+                if (!readiness.ready && !readiness.failed) {
+                    results.push({
+                        type: 'create-task',
+                        label: `Create ${symbolCount} task${symbolCount === 1 ? '' : 's'} on ${floorplan.name}`,
+                        status: 'pending',
+                        detail: describeFieldwireFloorplanPending(matchingFloorplan)
+                    })
+                    continue
+                }
+            } else {
+                continue
             }
-            continue
         }
         matchingFloorplan = await ensureFieldwireFloorplanName(fieldwire, fieldwireProjectId, matchingFloorplan, getFileBaseName(floorplan.name))
 
         const existingTasks = await fieldwire.projectFloorplanTasks(fieldwireProjectId, String(matchingFloorplan.id))
-        for (const symbol of getFloorplanSymbols(floorplan)) {
+        for (const symbol of symbols) {
+            if (createdSymbolIds.has(String(symbol.id || ''))) {
+                continue
+            }
             const taskName = String(symbol.label || symbol.text || symbol.deviceName || symbol.categoryName || 'Symbol').trim()
-            const existingTask = existingTasks.find((task: any) => normalizeLookupKey(task?.name) === normalizeLookupKey(taskName))
+            const existingTask = findExistingFieldwireTaskForSymbol(existingTasks, taskName, matchingFloorplan, symbol)
             if (existingTask) {
                 continue
             }
-            const team = await getOrCreateFieldwireTeam(fieldwire, fieldwireProjectId, taskContext, symbol.categoryName || 'Firewire')
-            const position = calculateFieldwirePosition(matchingFloorplan, symbol)
-            const financials = getFieldwireSymbolFinancials(symbol, symbolFinancials)
             try {
-                await fieldwire.createTask({
-                    project_id: fieldwireProjectId,
-                    creator_user_id: taskContext.userId,
-                    owner_user_id: taskContext.userId,
-                    floorplan_id: String(matchingFloorplan.id),
-                    team_id: team.id,
-                    is_local: true,
-                    name: taskName,
-                    pos_x: position.posX,
-                    pos_y: position.posY,
-                    priority: 2,
-                    status_id: taskContext.statusId,
-                    cost_value: financials.materialCost,
-                    man_power_value: financials.laborHours
-                })
-                results.push({
-                    type: 'create-task',
-                    label: `Create task ${taskName}`,
-                    status: 'success',
-                    detail: `Placed on ${floorplan.name} at ${formatPercent(toFiniteNumber(symbol.xRatio))}, ${formatPercent(toFiniteNumber(symbol.yRatio))}.`
-                })
+                await createFieldwireTaskForSymbol(fieldwire, fieldwireProjectId, matchingFloorplan, floorplan, symbol, taskContext, symbolFinancials)
+                results.push(createFieldwireTaskSuccessResult(floorplan, symbol, taskName))
             } catch (err: any) {
                 results.push({
                     type: 'create-task',
@@ -1019,6 +1141,122 @@ async function executeFieldwireImport(
             : 'Fieldwire import completed.',
         results
     }
+}
+
+async function waitForFieldwireFloorplanTaskReadiness(
+    fieldwire: FieldwireSDK,
+    fieldwireProjectId: string,
+    floorplan: any,
+    firewireFloorplan: any,
+    firstSymbol: any,
+    taskContext: any,
+    symbolFinancials: Map<string, any>,
+    results: any[]
+): Promise<{ ready: boolean, failed: boolean, floorplan: any | null, createdSymbolId: string | null }> {
+    const attempts = 20
+    const delayMs = 5000
+    const baseName = getFileBaseName(firewireFloorplan.name)
+    let latestFloorplan = floorplan
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        results.push({
+            type: 'wait-floorplan',
+            label: `Wait for floorplan ${firewireFloorplan.name}`,
+            status: 'skipped',
+            detail: `Fieldwire is preparing this floorplan for task placement. Attempt ${attempt} of ${attempts}.`
+        })
+        await delay(delayMs)
+        const fieldwireFloorplans = await fieldwire.projectFloorplans(fieldwireProjectId, true)
+        latestFloorplan = findMatchingFieldwireFloorplan(fieldwireFloorplans as any[], firewireFloorplan.name, baseName, latestFloorplan?.id)
+            || latestFloorplan
+        if (!isFieldwireFloorplanReady(latestFloorplan)) {
+            continue
+        }
+        latestFloorplan = await ensureFieldwireFloorplanName(fieldwire, fieldwireProjectId, latestFloorplan, baseName)
+        if (!firstSymbol) {
+            return { ready: true, failed: false, floorplan: latestFloorplan, createdSymbolId: null }
+        }
+        const taskName = String(firstSymbol.label || firstSymbol.text || firstSymbol.deviceName || firstSymbol.categoryName || 'Symbol').trim()
+        try {
+            await createFieldwireTaskForSymbol(fieldwire, fieldwireProjectId, latestFloorplan, firewireFloorplan, firstSymbol, taskContext, symbolFinancials)
+            const successResult = createFieldwireTaskSuccessResult(firewireFloorplan, firstSymbol, taskName)
+            results.push({
+                ...successResult,
+                detail: `Fieldwire floorplan is ready. ${successResult.detail}`
+            })
+            return { ready: true, failed: false, floorplan: latestFloorplan, createdSymbolId: String(firstSymbol.id || '') }
+        } catch (err: any) {
+            if (attempt >= attempts || !isRetryableFieldwireFloorplanTaskError(err)) {
+                results.push({
+                    type: 'create-task',
+                    label: `Create task ${taskName}`,
+                    status: 'failed',
+                    detail: err?.message || String(err)
+                })
+                return { ready: false, failed: true, floorplan: latestFloorplan, createdSymbolId: null }
+            }
+        }
+    }
+    return { ready: false, failed: false, floorplan: latestFloorplan, createdSymbolId: null }
+}
+
+async function createFieldwireTaskForSymbol(
+    fieldwire: FieldwireSDK,
+    fieldwireProjectId: string,
+    matchingFloorplan: any,
+    floorplan: any,
+    symbol: any,
+    taskContext: any,
+    symbolFinancials: Map<string, any>
+): Promise<any> {
+    const taskName = String(symbol.label || symbol.text || symbol.deviceName || symbol.categoryName || 'Symbol').trim()
+    const team = await getOrCreateFieldwireTeam(fieldwire, fieldwireProjectId, taskContext, symbol.categoryName || 'Firewire')
+    const position = calculateFieldwirePosition(matchingFloorplan, symbol)
+    const financials = getFieldwireSymbolFinancials(symbol, symbolFinancials)
+    return fieldwire.createTask({
+        project_id: fieldwireProjectId,
+        creator_user_id: taskContext.userId,
+        owner_user_id: taskContext.userId,
+        floorplan_id: String(matchingFloorplan.id),
+        team_id: team.id,
+        is_local: true,
+        name: taskName,
+        pos_x: position.posX,
+        pos_y: position.posY,
+        priority: 2,
+        status_id: taskContext.statusId,
+        cost_value: financials.materialCost,
+        man_power_value: financials.laborHours
+    })
+}
+
+function createFieldwireTaskSuccessResult(floorplan: any, symbol: any, taskName: string): any {
+    return {
+        type: 'create-task',
+        label: `Create task ${taskName}`,
+        status: 'success',
+        detail: `Placed on ${floorplan.name} at ${formatPercent(toFiniteNumber(symbol.xRatio))}, ${formatPercent(toFiniteNumber(symbol.yRatio))}.`
+    }
+}
+
+function isRetryableFieldwireFloorplanTaskError(err: any): boolean {
+    const message = String(err?.message || err || '').toLowerCase()
+    return [
+        'floorplan',
+        'sheet',
+        'processing',
+        'pending',
+        'not ready',
+        'not found',
+        'cannot find',
+        '422',
+        '404',
+        'timeout',
+        'temporar'
+    ].some((token) => message.includes(token))
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function createFieldwireFloorplanFromFirewireFile(fieldwire: FieldwireSDK, workspaceKey: string, fieldwireProjectId: string, fieldwireUserId: string, floorplan: any): Promise<any> {
@@ -1177,6 +1415,24 @@ function calculateFieldwirePosition(fieldwireFloorplan: any, symbol: any): { pos
         posX: Math.round(fileWidth * xRatio),
         posY: Math.round(fileHeight * yRatio)
     }
+}
+
+function findExistingFieldwireTaskForSymbol(existingTasks: any[], taskName: string, fieldwireFloorplan: any, symbol: any): any | null {
+    const matchingNameTasks = (existingTasks || [])
+        .filter((task: any) => normalizeLookupKey(task?.name) === normalizeLookupKey(taskName))
+    if (matchingNameTasks.length <= 0) {
+        return null
+    }
+    const expectedPosition = calculateFieldwirePosition(fieldwireFloorplan, symbol)
+    return matchingNameTasks.find((task: any) => {
+        const taskX = toFiniteNumber(task?.pos_x ?? task?.posX)
+        const taskY = toFiniteNumber(task?.pos_y ?? task?.posY)
+        if (taskX === null || taskY === null) {
+            return false
+        }
+        return Math.abs(taskX - expectedPosition.posX) <= 6
+            && Math.abs(taskY - expectedPosition.posY) <= 6
+    }) || null
 }
 
 function normalizeArray(value: any): any[] {

@@ -147,19 +147,24 @@ export class FieldwireSDK {
                 })
 
                 if (response.status >= 300) {
-                    return reject(new Error(`${response.status}: ${response.statusText}`))
+                    const errorText = await response.text().catch(() => '')
+                    console.log(`RESPONSE: ${response.status} ${response.statusText}${errorText ? ` ${truncateFieldwireLog(errorText)}` : ''}`)
+                    return reject(new Error(`${response.status}: ${response.statusText}${errorText ? ` - ${errorText}` : ''}`))
                 }
                 const contentType = response.headers.get('Content-Type') || ''
                 if (contentType.includes('application/json')) {
                     try {
                         const result = await response.json()
+                        console.log(`RESPONSE: ${response.status} ${response.statusText} ${truncateFieldwireLog(JSON.stringify(result))}`)
                         return resolve(result)
                     } catch (parseErr) {
                         const justParseText = response.bodyUsed ? 'OK': await response.text()
+                        console.log(`RESPONSE: ${response.status} ${response.statusText} ${truncateFieldwireLog(String(justParseText))}`)
                         return resolve(justParseText)
                     }
                 }
                 const resultText = await response.text()
+                console.log(`RESPONSE: ${response.status} ${response.statusText} ${truncateFieldwireLog(resultText)}`)
                 return resolve(resultText)
             } catch (err) {
                 return reject(err)
@@ -299,9 +304,9 @@ export class FieldwireSDK {
                 const project = input?.project ? input.project : input
                 const result = await this.post(`projects`, {
                     project: {
-                        name: project?.name,
-                        code: project?.code,
-                        address: project?.address,
+                        name: String(project?.name || '').trim(),
+                        code: String(project?.code || '').trim() || undefined,
+                        address: String(project?.address || '').trim() || undefined,
                         time_zone: project?.time_zone || 'America/Chicago'
                     }
                 })
@@ -1057,7 +1062,8 @@ export class FieldwireSDK {
                                 slcAddress: testDevice.slcAddress,
                                 serialNumber: testDevice.serialNumber,
                                 strobeAddress: testDevice.strobeAddress,
-                                speakerAddress: testDevice.speakerAddress
+                                speakerAddress: testDevice.speakerAddress,
+                                areaOfInfluence: ''
                             }
                             await sqldb.createDevice(newDevice)
                             testDeviceInDb = await sqldb.getDeviceByPartNumber(newDevice.partNumber)
@@ -1457,6 +1463,11 @@ export class FieldwireSDK {
     }
     // #endregion
 
+}
+
+function truncateFieldwireLog(value: string): string {
+    const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+    return normalized.length > 600 ? `${normalized.slice(0, 600)}...` : normalized
 }
 
 export interface PreviewResponse {

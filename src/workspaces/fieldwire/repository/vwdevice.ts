@@ -4,6 +4,7 @@ export interface VwDevice {
     shortName: string
     categoryName: string
     includeOnFloorplan: boolean
+    floorplanLabelText?: string | null
     vendorId: string
     vendorName: string
     partNumber: string
@@ -18,6 +19,7 @@ export interface VwDevice {
     serialNumber: string
     strobeAddress: string
     speakerAddress: string
+    areaOfInfluence: string
     createat: Date
     createby: string
     updateat: Date

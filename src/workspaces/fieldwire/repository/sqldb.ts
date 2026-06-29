@@ -309,9 +309,11 @@ export class SqlDb {
         return this._getMany<DeviceAlias>('deviceAliases')
     }
     public async getMaterialAttributes(): Promise<MaterialAttribute[]> {
+        await this.ensureDeviceMaterialTextSchema()
         return this._getMany<MaterialAttribute>('materialAttributes')
     }
     public async getMaterialAttributesByDeviceId(deviceId: string): Promise<MaterialAttribute[]> {
+        await this.ensureDeviceMaterialTextSchema()
         return this._getMany<MaterialAttribute>('materialAttributes', `materialId='${deviceId}'`)
     }
     public async getMaterialSubTasks(): Promise<MaterialSubTask[]> {
@@ -466,6 +468,7 @@ export class SqlDb {
                         [vendorId]='${this._escapeSql(input.vendorId)}',
                         [categoryName]=N'${this._escapeSql(this._truncateSqlString(input.categoryName || '', 500))}',
                         [includeOnFloorplan]=${input.includeOnFloorplan ? 1 : 0},
+                        [floorplanLabelText]=${this._toSqlValue(this._truncateSqlString(input.floorplanLabelText || '', 4) || null)},
                         [partNumber]=N'${this._escapeSql(this._truncateSqlString(input.partNumber, 120))}',
                         [link]=N'${this._escapeSql(this._truncateSqlString(input.link || '', 1000))}',
                         [cost]=${Number(input.cost || 0)},
@@ -477,6 +480,7 @@ export class SqlDb {
                         [serialNumber]=N'${this._escapeSql(this._truncateSqlString(input.serialNumber || '', 100))}',
                         [strobeAddress]=N'${this._escapeSql(this._truncateSqlString(input.strobeAddress || '', 100))}',
                         [speakerAddress]=N'${this._escapeSql(this._truncateSqlString(input.speakerAddress || '', 100))}',
+                        [areaOfInfluence]=N'${this._escapeSql(this._truncateSqlString(input.areaOfInfluence || '', 100))}',
                         [updateat]=GETDATE(),
                         [updateby]='system'
                     WHERE [deviceId]='${this._escapeSql(input.deviceId)}'`)
@@ -560,14 +564,14 @@ export class SqlDb {
                 await this.ensureDeviceMaterialTextSchema()
                 const sql = this.app.locals.sqlserver
                 const result = await sql.query(`INSERT INTO devices(
-                    name, shortName, vendorId, categoryName, includeOnFloorplan,
+                    name, shortName, vendorId, categoryName, includeOnFloorplan, floorplanLabelText,
                     partNumber, link, cost, defaultLabor, laborRate, iconId, iconForegroundColor,
-                    slcAddress, serialNumber, strobeAddress, speakerAddress
+                    slcAddress, serialNumber, strobeAddress, speakerAddress, areaOfInfluence
                 )
                 VALUES(
-                    ${this._toSqlValue(this._truncateSqlString(input.name, 500))}, ${this._toSqlValue(this._truncateSqlString(input.shortName || '', 200))}, '${this._escapeSql(input.vendorId)}', ${this._toSqlValue(this._truncateSqlString(input.categoryName || '', 500))}, ${input.includeOnFloorplan ? 1 : 0},
+                    ${this._toSqlValue(this._truncateSqlString(input.name, 500))}, ${this._toSqlValue(this._truncateSqlString(input.shortName || '', 200))}, '${this._escapeSql(input.vendorId)}', ${this._toSqlValue(this._truncateSqlString(input.categoryName || '', 500))}, ${input.includeOnFloorplan ? 1 : 0}, ${this._toSqlValue(this._truncateSqlString(input.floorplanLabelText || '', 4) || null)},
                     ${this._toSqlValue(this._truncateSqlString(input.partNumber, 120))}, ${this._toSqlValue(this._truncateSqlString(input.link || '', 1000))}, ${Number(input.cost || 0)}, ${Number(input.defaultLabor || 0)}, ${Number(input.laborRate || 56)}, ${this._toSqlValue(input.iconId || null)}, ${this._toSqlValue(this._truncateSqlString(input.iconForegroundColor || '', 40) || null)},
-                    ${this._toSqlValue(this._truncateSqlString(input.slcAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.serialNumber || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.strobeAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.speakerAddress || '', 100))}
+                    ${this._toSqlValue(this._truncateSqlString(input.slcAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.serialNumber || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.strobeAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.speakerAddress || '', 100))}, ${this._toSqlValue(this._truncateSqlString(input.areaOfInfluence || '', 100))}
                 )`)
                 this.app.locals.devices = null
                 this.app.locals.vwDevices = null
@@ -928,8 +932,9 @@ export class SqlDb {
         return new Promise(async(resolve, reject) => {
             try {
                 const sql = this.app.locals.sqlserver
+                await this.ensureDeviceMaterialTextSchema()
                 await sql.query(`INSERT INTO materialAttributes(
-                    [name], [statusId], [materialId], [projectId], [valueType], [defaultValue], [ordinal], [org]
+                    [name], [statusId], [materialId], [projectId], [valueType], [defaultValue], [isReadOnly], [ordinal], [org]
                 ) VALUES (
                     N'${this._escapeSql(input.name)}',
                     N'${this._escapeSql(input.statusId || '')}',
@@ -937,6 +942,7 @@ export class SqlDb {
                     ${input.projectId ? `'${this._escapeSql(input.projectId)}'` : 'NULL'},
                     N'${this._escapeSql(input.valueType || 'text')}',
                     N'${this._escapeSql(String(input.defaultValue || ''))}',
+                    ${input.isReadOnly ? 1 : 0},
                     ${Number(input.ordinal || 0)},
                     NULL
                 )`)
@@ -952,6 +958,7 @@ export class SqlDb {
         return new Promise(async(resolve, reject) => {
             try {
                 const sql = this.app.locals.sqlserver
+                await this.ensureDeviceMaterialTextSchema()
                 await sql.query(`DELETE FROM [materialAttributes] WHERE [materialId]='${this._escapeSql(materialId)}'`)
                 this.app.locals.materialAttributes = null
                 return resolve(true)
@@ -1434,6 +1441,10 @@ export class SqlDb {
                 BEGIN
                     ALTER TABLE dbo.devices ADD [includeOnFloorplan] BIT NOT NULL CONSTRAINT [DF_devices_includeOnFloorplan_runtime] DEFAULT ((0))
                 END
+                IF COL_LENGTH('dbo.devices', 'floorplanLabelText') IS NULL
+                BEGIN
+                    ALTER TABLE dbo.devices ADD [floorplanLabelText] NVARCHAR(4) NULL
+                END
                 IF COL_LENGTH('dbo.devices', 'iconId') IS NULL
                 BEGIN
                     ALTER TABLE dbo.devices ADD [iconId] UNIQUEIDENTIFIER NULL
@@ -1441,6 +1452,10 @@ export class SqlDb {
                 IF COL_LENGTH('dbo.devices', 'iconForegroundColor') IS NULL
                 BEGIN
                     ALTER TABLE dbo.devices ADD [iconForegroundColor] NVARCHAR(40) NULL
+                END
+                IF COL_LENGTH('dbo.devices', 'areaOfInfluence') IS NULL
+                BEGIN
+                    ALTER TABLE dbo.devices ADD [areaOfInfluence] NVARCHAR(100) NULL
                 END
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'name' AND max_length < 1000)
                     ALTER TABLE dbo.devices ALTER COLUMN [name] NVARCHAR(500) NOT NULL
@@ -1458,6 +1473,16 @@ export class SqlDb {
                     ALTER TABLE dbo.devices ALTER COLUMN [strobeAddress] NVARCHAR(100) NULL
                 IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'speakerAddress' AND max_length < 200)
                     ALTER TABLE dbo.devices ALTER COLUMN [speakerAddress] NVARCHAR(100) NULL
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.devices') AND name = 'areaOfInfluence' AND max_length < 200)
+                    ALTER TABLE dbo.devices ALTER COLUMN [areaOfInfluence] NVARCHAR(100) NULL
+            END
+
+            IF OBJECT_ID('dbo.materialAttributes', 'U') IS NOT NULL
+            BEGIN
+                IF COL_LENGTH('dbo.materialAttributes', 'isReadOnly') IS NULL
+                BEGIN
+                    ALTER TABLE dbo.materialAttributes ADD [isReadOnly] BIT NOT NULL CONSTRAINT [DF_materialAttributes_isReadOnly_runtime] DEFAULT ((0))
+                END
             END
 
             IF OBJECT_ID('dbo.deviceParts', 'U') IS NULL
@@ -1553,9 +1578,9 @@ export class SqlDb {
         await sql.query(`
             EXEC(N'CREATE OR ALTER VIEW [dbo].[vwDevices]
                 AS
-                SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryName, dbo.devices.includeOnFloorplan, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost,
+                SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryName, dbo.devices.includeOnFloorplan, dbo.devices.floorplanLabelText, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost,
                     dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.iconId, dbo.deviceIcons.label AS iconLabel, dbo.deviceIcons.dataUrl AS iconDataUrl, dbo.devices.iconForegroundColor,
-                    dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
+                    dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.areaOfInfluence, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
                     ISNULL(attributeCounts.attributeCount, 0) AS attributeCount,
                     ISNULL(subTaskCounts.subTaskCount, 0) AS subTaskCount
                 FROM dbo.devices INNER JOIN

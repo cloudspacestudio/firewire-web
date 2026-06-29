@@ -1,17 +1,24 @@
 # Firewire Agent Guide
 
-This folder is the project memory for future Codex, Copilot, and other AI-agent sessions. Read this file before changing the Firewire monorepo, then use the companion docs in `agent-docs/docs`.
+This folder is the project memory for future Codex, Copilot, and other AI-agent sessions. Read this file before changing Firewire, then use the companion docs in `agent-docs/docs`.
 
 ## Application Context
 
 Firewire is a line-of-business system for planning and executing fire and safety device projects. Sales users receive customer documents and floorplans, create estimates, add devices to floorplans, compose project BOMs, and move accepted work into design or install workflows. The system also exports approved project information into Fieldwire, a third-party construction planning system.
 
-The monorepo contains:
+The local workspace is a parent folder that contains two separate sibling repositories, not a monorepo. Each repo has its own git root, status, and validation commands:
 
 - `firewire-web`: Node/Express TypeScript middleware API.
 - `firewire-ui`: Angular SPA client.
 - `firewire-web/src/workspaces/fieldwire`: legacy Fieldwire-facing API, SQL repository, vendor/device/part domain, and SQL scripts.
 - `firewire-web/src/workspaces/firewire`: newer Firewire APIs, project repositories, document storage, user preferences, and project settings.
+
+Run git commands from the specific repo being inspected or summarized:
+
+- `/Users/borgroot/source/firewire/firewire-web`
+- `/Users/borgroot/source/firewire/firewire-ui`
+
+Do not assume `/Users/borgroot/source/firewire` is a git repository. When a change spans both app and API, check and report both repo states separately.
 
 ## First Moves For Future Agents
 
@@ -47,6 +54,7 @@ Use `docs/change-checklist.md` as the pre-change and pre-finish checklist.
 - For physical project documents, use `AzureBlobDocumentStorage`; SQL/workspace storage should keep metadata and blob pointers, not large file payloads.
 - Angular uses standalone lazy route components, Angular Material, `HttpClient`, and common components/services under `firewire-ui/src/app/common`.
 - Reuse `PageToolbar`, `NavToolbar`, `FirewireBomWorksheetComponent`, `FirewireEstimateSummaryComponent`, `FirewireFloorplansComponent`, `FirewireDocLibraryExplorerComponent`, and existing common services before creating page-local equivalents.
+- Treat Project Detail and Sales Quick Start as paired product surfaces for shared estimating workflows. When changing BOM behavior, floorplans, document library/floorplan uploads, customer info, estimate summary/pricing, quote/report output, or worksheet-derived totals in one surface, inspect and update the other surface or extract/reuse a common component/service in the same change.
 - For upload/preview/download/delete file workflows, reuse or create common media/document services under `firewire-ui/src/app/common/services`; keep bytes in Azure Blob Storage and keep SQL/workspace records as metadata plus blob references.
 - Data-table focused pages must avoid nested vertical page/table scrolling. Keep filters, criteria, notifications, action headers, and paginator/footer visible in the page frame; only the table data viewport should scroll. Sticky table headers must have opaque backgrounds so rows never bleed through underneath.
 - Pages with filters, sort state, page size, selected criteria, tabs, or other view options that control underlying data must persist the user's latest selections locally and reapply them when the user returns to the page. Use the shared Angular `ViewPreferencesService` with stable namespaced keys instead of page-local `localStorage` access.

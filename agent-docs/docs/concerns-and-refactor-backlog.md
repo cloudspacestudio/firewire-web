@@ -44,6 +44,10 @@ This is a living list of drift, risks, and consolidation opportunities. It is no
 
    Existing code uses `{ rows }`, `{ data }`, and direct objects. New endpoints should follow nearby convention, but broader API consistency remains a cleanup opportunity.
 
+11. Project Detail and Sales Quick Start can drift.
+
+   These pages share core estimating concepts but still mix common components with page-local logic. Floorplans now use shared folder-capable UI, and Sales Quick Start uses `FirewireEstimateSummaryComponent`, but Project Detail still owns a large local summary implementation. Changes to BOMs, floorplans, customer info, summary/pricing, or quote/report output should update both pages in the same pass or extract the behavior into a shared component/service.
+
 ## Suggested Consolidation Sequence
 
 1. Agent documentation and architectural memory.
@@ -62,15 +66,19 @@ This is a living list of drift, risks, and consolidation opportunities. It is no
 
    Add Angular services for device catalog, vendor parts, and device sets where pages currently duplicate direct HTTP calls.
 
-5. Canonical parts naming cleanup.
+5. Project Detail / Sales Quick Start estimate consolidation.
+
+   Move remaining duplicated project summary/pricing/customer-info/report logic behind shared components or services. Start by reconciling Project Detail's page-local summary with `FirewireEstimateSummaryComponent` so Sales Quick Start and Project Detail cannot drift on totals, tax, labels, or rounding.
+
+6. Canonical parts naming cleanup.
 
    Gradually migrate Angular components from compatibility aliases to canonical `partNumber`, `description`, `msrp`, and `cost` fields. Preserve snapshots, preview validation, restore, vendor config, and run history.
 
-6. BOM snapshot contract.
+7. BOM snapshot contract.
 
    Document and test the rule that BOM rows preserve point-in-time device data and hidden `bomRowParts` preserve the device-part cost snapshots used to produce that row.
 
-7. Runtime auth config verification.
+8. Runtime auth config verification.
 
    Locate or add the deployment/runtime auth config generation path and document exact generated file names and environment variables.
 
@@ -85,3 +93,4 @@ This is a living list of drift, risks, and consolidation opportunities. It is no
 - Removing `/api/fieldwire/*` aliases without updating old UI call sites.
 - Treating `AuthStrategy.none` in a manifest as an instruction to skip global `/api` auth.
 - Copying another page's SCSS/table code instead of extracting a shared primitive when the behavior is the same.
+- Updating only Project Detail or only Sales Quick Start for a shared estimating workflow and leaving the paired page with stale totals, labels, floorplan behavior, or report data.

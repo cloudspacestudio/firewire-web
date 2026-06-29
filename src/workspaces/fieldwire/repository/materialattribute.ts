@@ -6,6 +6,7 @@ export interface MaterialAttribute {
     projectId: string
     valueType: string
     defaultValue: string
+    isReadOnly?: boolean
     ordinal: number
     toBeValue: number | string | null
 }

@@ -139,6 +139,11 @@ interface DeviceMediaFile {
     blobName: string
 }
 
+interface DeviceTagRecord {
+    id: string
+    label: string
+}
+
 export class FirewireData {
 
     static manifestItems = [
@@ -648,6 +653,7 @@ export class FirewireData {
                         await sqldb.deleteDeviceVendorLinkIgnoresByDeviceId(deviceId)
                         await sqldb.deleteDeviceSetDevicesByDeviceId(deviceId)
                         const deletedMediaBlobs = await FirewireData.deleteDeviceMediaWorkspace(sqldb, deviceId)
+                        await sqldb.deleteWorkspaceStorage('device-tags', deviceId)
                         await sqldb.deleteDevice(deviceId)
 
                         return res.status(200).json({
@@ -679,6 +685,51 @@ export class FirewireData {
                     const sqldb = new SqlDb(req.app)
                     const result = await FirewireData.loadStoredWorkspace(sqldb, 'device-media', deviceId, { files: [] })
                     return res.status(200).json({ data: result.payload })
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
+            }
+        },
+        {
+            method: 'get',
+            path: '/api/firewire/devices/:deviceId/tags',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const deviceId = String(req.params.deviceId || '').trim()
+                    if (!deviceId) {
+                        return res.status(400).json({ message: 'deviceId is required.' })
+                    }
+                    const sqldb = new SqlDb(req.app)
+                    const result = await FirewireData.loadStoredWorkspace(sqldb, 'device-tags', deviceId, { tags: [] })
+                    const tags = FirewireData.normalizeDeviceTags(result.payload?.tags)
+                    return res.status(200).json({ data: { tags } })
+                } catch (err: Error|any) {
+                    return res.status(500).json({
+                        message: err && err.message ? err.message : err
+                    })
+                }
+            }
+        },
+        {
+            method: 'put',
+            path: '/api/firewire/devices/:deviceId/tags',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const deviceId = String(req.params.deviceId || '').trim()
+                    if (!deviceId) {
+                        return res.status(400).json({ message: 'deviceId is required.' })
+                    }
+                    const sqldb = new SqlDb(req.app)
+                    const device = await sqldb.getDevice(deviceId)
+                    if (!device) {
+                        return res.status(404).json({ message: `Device ${deviceId} not found.` })
+                    }
+                    const tags = FirewireData.normalizeDeviceTags(req.body?.tags)
+                    const payload = { tags }
+                    await sqldb.saveWorkspaceStorage('device-tags', deviceId, JSON.stringify(payload), FirewireData.resolveUserId(req))
+                    return res.status(200).json({ data: payload })
                 } catch (err: Error|any) {
                     return res.status(500).json({
                         message: err && err.message ? err.message : err
@@ -896,6 +947,17 @@ export class FirewireData {
                         const includeOnFloorplan = typeof req.body?.device?.includeOnFloorplan === 'undefined'
                             ? !!existing.includeOnFloorplan
                             : !!req.body.device.includeOnFloorplan
+                        const floorplanLabelText = includeOnFloorplan
+                            ? FirewireData.normalizeFloorplanLabelText(
+                                req.body?.device?.floorplanLabelText,
+                                existing.floorplanLabelText || existing.shortName || existing.partNumber || ''
+                            )
+                            : ''
+                        if (includeOnFloorplan && !floorplanLabelText) {
+                            return res.status(400).json({
+                                message: 'Floorplan Label Text is required and must be 1 to 4 characters when Include on Floorplan is enabled.'
+                            })
+                        }
                         const vendor = await sqldb.getVendorById(vendorId)
                         if (!vendor) {
                             return res.status(404).json({
@@ -910,6 +972,7 @@ export class FirewireData {
                             vendorId,
                             categoryName,
                             includeOnFloorplan,
+                            floorplanLabelText,
                             partNumber: String(req.body?.device?.partNumber || existing.partNumber || '').trim(),
                             link: String(req.body?.device?.link || '').trim(),
                             cost: Number(req.body?.device?.cost ?? existing.cost ?? 0),
@@ -920,7 +983,8 @@ export class FirewireData {
                             slcAddress: String(req.body?.device?.slcAddress || '').trim(),
                             serialNumber: String(req.body?.device?.serialNumber || '').trim(),
                             strobeAddress: String(req.body?.device?.strobeAddress || '').trim(),
-                            speakerAddress: String(req.body?.device?.speakerAddress || '').trim()
+                            speakerAddress: String(req.body?.device?.speakerAddress || '').trim(),
+                            areaOfInfluence: String(req.body?.device?.areaOfInfluence || '').trim()
                         })
 
                         const devicePartsPayload = Array.isArray(req.body?.deviceParts)
@@ -956,10 +1020,31 @@ export class FirewireData {
                             seenDeviceParts.add(dedupeKey)
                         }
 
-                        await sqldb.replaceDeviceParts(deviceId, devicePartSnapshots, FirewireData.resolveUserId(req))
-
-                        await sqldb.deleteMaterialAttributesByMaterialId(deviceId)
                         const attributes = Array.isArray(req.body?.attributes) ? req.body.attributes : []
+                        const areaOfInfluenceEnabled = String(req.body?.device?.areaOfInfluence || '').trim().toLowerCase() === 'n/a'
+                        const areaOfInfluenceAttribute = attributes.find((attribute: any) => String(attribute?.name || '').trim() === 'Area of Influence')
+                        if (areaOfInfluenceEnabled) {
+                            const radiusFeet = Number(areaOfInfluenceAttribute?.defaultValue)
+                            if (!areaOfInfluenceAttribute || !Number.isFinite(radiusFeet) || radiusFeet <= 0) {
+                                return res.status(400).json({
+                                    message: 'Area of Influence requires a numeric radius greater than 0 feet.'
+                                })
+                            }
+                            areaOfInfluenceAttribute.isReadOnly = true
+                            areaOfInfluenceAttribute.valueType = 'number'
+                            areaOfInfluenceAttribute.defaultValue = String(radiusFeet)
+                        }
+                        for (const attribute of attributes) {
+                            const name = String(attribute?.name || '').trim()
+                            if (!!name && !!attribute?.isReadOnly && !String(attribute?.defaultValue || '').trim()) {
+                                return res.status(400).json({
+                                    message: `${name} is read-only and requires a value.`
+                                })
+                            }
+                        }
+
+                        await sqldb.replaceDeviceParts(deviceId, devicePartSnapshots, FirewireData.resolveUserId(req))
+                        await sqldb.deleteMaterialAttributesByMaterialId(deviceId)
                         for (let index = 0; index < attributes.length; index++) {
                             const attribute = attributes[index]
                             const name = String(attribute?.name || '').trim()
@@ -974,6 +1059,7 @@ export class FirewireData {
                                 projectId: '',
                                 valueType: String(attribute?.valueType || 'text').trim(),
                                 defaultValue: String(attribute?.defaultValue || '').trim(),
+                                isReadOnly: !!attribute?.isReadOnly,
                                 ordinal: Number(attribute?.ordinal ?? index),
                                 toBeValue: null
                             })
@@ -997,6 +1083,11 @@ export class FirewireData {
                                 projectId: '',
                                 org: ''
                             })
+                        }
+
+                        if (Array.isArray(req.body?.tags)) {
+                            const tags = FirewireData.normalizeDeviceTags(req.body.tags)
+                            await sqldb.saveWorkspaceStorage('device-tags', deviceId, JSON.stringify({ tags }), FirewireData.resolveUserId(req))
                         }
 
                         const updated = await sqldb.getDevice(deviceId)
@@ -2961,6 +3052,7 @@ export class FirewireData {
                 vendorId: device.vendorId,
                 categoryName: device.categoryName,
                 includeOnFloorplan: !!device.includeOnFloorplan,
+                floorplanLabelText: device.floorplanLabelText || '',
                 partNumber: device.partNumber,
                 link: '',
                 cost: refreshedCost,
@@ -2971,7 +3063,8 @@ export class FirewireData {
                 slcAddress: device.slcAddress || '',
                 serialNumber: device.serialNumber || '',
                 strobeAddress: device.strobeAddress || '',
-                speakerAddress: device.speakerAddress || ''
+                speakerAddress: device.speakerAddress || '',
+                areaOfInfluence: device.areaOfInfluence || ''
             })
         }
 
@@ -3036,6 +3129,9 @@ export class FirewireData {
 
         const safeDeviceName = FirewireData.getSafeDeviceName(name, partNumber)
         const safeShortName = FirewireData.limitText(shortName || partNumber, 50) || partNumber
+        const floorplanLabelText = includeOnFloorplan
+            ? FirewireData.normalizeFloorplanLabelText(body?.floorplanLabelText, safeShortName || partNumber)
+            : ''
         const defaultLabor = Number(body?.defaultLabor ?? 112)
 
         await sqldb.createDevice({
@@ -3045,6 +3141,7 @@ export class FirewireData {
             vendorId: vendor.vendorId,
             categoryName,
             includeOnFloorplan,
+            floorplanLabelText,
             partNumber,
             link: '',
             cost: Number(part.SalesPrice || part.MSRPPrice || 0),
@@ -3054,7 +3151,8 @@ export class FirewireData {
             slcAddress: '',
             serialNumber: '',
             strobeAddress: '',
-            speakerAddress: ''
+            speakerAddress: '',
+            areaOfInfluence: ''
         })
 
         const device = await sqldb.getDeviceByVendorAndPartNumber(vendor.vendorId, partNumber)
@@ -3122,6 +3220,34 @@ export class FirewireData {
 
     private static limitText(value: string, maxLength: number): string {
         return String(value || '').trim().slice(0, Math.max(0, maxLength))
+    }
+
+    private static normalizeFloorplanLabelText(value: unknown, fallback: unknown = ''): string {
+        const raw = String(value ?? '').trim()
+        const source = raw || String(fallback ?? '').trim()
+        return source.replace(/\s+/g, '').slice(0, 4)
+    }
+
+    private static normalizeDeviceTags(input: unknown): DeviceTagRecord[] {
+        const source = Array.isArray(input) ? input : []
+        const seen = new Set<string>()
+        const tags: DeviceTagRecord[] = []
+        for (const raw of source) {
+            const label = String((raw as any)?.label ?? raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 80)
+            if (!label) {
+                continue
+            }
+            const key = label.toLowerCase()
+            if (seen.has(key)) {
+                continue
+            }
+            seen.add(key)
+            tags.push({
+                id: String((raw as any)?.id || '').trim() || FirewireData.createClientSafeId('tag'),
+                label
+            })
+        }
+        return tags
     }
 
     private static getSafeDeviceName(name: string, partNumber: string): string {

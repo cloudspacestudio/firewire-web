@@ -115,6 +115,20 @@ Prefer existing common components:
 
 Avoid creating another page-local table/toolbar/filter pattern without checking whether it can be shared. Several pages already duplicate filter/sort/page-size persistence around `MatTableDataSource`; this is a refactor candidate.
 
+## Project Detail And Sales Quick Start Parity
+
+Project Detail (`firewire-ui/src/app/pages/projects/project.page.*`) and Sales Quick Start (`firewire-ui/src/app/pages/sales/sales-project.page.*`) expose many of the same estimating workflows to different entry points. Treat them as paired surfaces, not separate feature islands.
+
+When touching any of these workflows, inspect and update both surfaces in the same change:
+
+- BOM rows, section totals, device snapshots, floorplan-symbol synchronization, and BOM save behavior.
+- Floorplan listing, floorplan folders, uploads, moves, thumbnails, and designer launch behavior.
+- Customer info used by project forms, setup sheets, quotes, and report previews. Project Detail and Sales Quick Start must use `FirewireCustomerInfoCardComponent` for the shared customer card/edit experience, including Business Point of Contact and the default edit mode when no customer data exists.
+- Estimate summary totals, risk/proficiency, margin, tax handling, rounded pricing, quote labels, and report/customer-facing totals.
+- Document-library records that are reused by floorplans or proposal output.
+
+Prefer shared components such as `FirewireBomWorksheetComponent`, `FirewireCustomerInfoCardComponent`, `FirewireFloorplansComponent`, `FirewireEstimateSummaryComponent`, and shared storage/services before duplicating logic. If one surface must remain page-local temporarily, document the drift in `concerns-and-refactor-backlog.md` and include a small parity note in the final response.
+
 ## Contextual Control Help Pattern
 
 When a button or compact control performs domain-specific work that may not be obvious from its label, pair it with a small clickable help icon directly beside the control with only a slight gap. Use Angular Material `MatTooltipModule`, `matTooltip`, and the shared classes `fw-control-help-button` and `fw-control-help-tooltip`. The help trigger should render as an icon only, without a bordered button container.
@@ -126,6 +140,8 @@ Keep the control label short and action-oriented. Put the human-readable explana
 Pages whose primary purpose is a data table should use a fixed page frame with one internal data scroll area. Filters, criteria controls, status/notification text, page action buttons, and the table paginator/footer should remain visible without creating a second vertical page scrollbar.
 
 For Angular Material tables, keep the paginator outside the table scrollport and let only the table data viewport scroll. Sticky header rows/cells must have opaque backgrounds and sufficient stacking order so row values never visually bleed through underneath the headers while scrolling. Do not solve table height by making the whole page scroll.
+
+For non-table page shells that use the global `.page-root > .page-content` frame, place page content inside `.content-root` unless the page provides an equivalent local scroll container. The global page frame intentionally hides overflow; without a scrollable child, lower content becomes unreachable.
 
 ## View Preference Persistence Pattern
 
@@ -145,6 +161,8 @@ Global styles and theme variables live in:
 - `firewire-ui/src/assets/_sci-fi-theme.scss`
 
 Feature SCSS files often contain substantial page-specific styling. When standardizing UI, extract reusable layout/table/filter/dialog styles deliberately rather than copying a page stylesheet into another feature.
+
+All visible application scrollbars should match the Firewire sci-fi theme. Global WebKit scrollbar styling lives in `firewire-ui/src/styles.scss`; when adding a new local scroll container with `overflow: auto` or `overflow-y: auto`, also set the themed Firefox properties (`scrollbar-color: rgba(72, 221, 255, 0.45) rgba(8, 12, 20, 0.9)` and `scrollbar-width: thin`) unless the container already inherits them through a shared wrapper.
 
 ## Angular Control Shape Pattern
 

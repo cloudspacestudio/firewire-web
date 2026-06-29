@@ -8,6 +8,8 @@ Use this checklist for every non-human workflow before editing and before finish
 - [ ] Read `firewire-web/agent-docs/AGENTS.md`.
 - [ ] Read the relevant files under `firewire-web/agent-docs/docs`.
 - [ ] Search for existing code patterns before creating new components, repositories, services, routes, schemas, or styles.
+- [ ] If the work touches Project Detail or Sales Quick Start estimating workflows, inspect the paired surface and shared components for the same required change.
+- [ ] If the work touches change orders, preserve the split between live delta data and read-only `worksheetData.changeOrderBaseline` history.
 - [ ] Identify whether the change affects documentation.
 
 ## Documentation Impact Check
@@ -27,6 +29,7 @@ Update docs in the same atomic change if the work affects any of these:
 ## Before Finishing
 
 - [ ] Code and docs describe the same behavior.
+- [ ] Project Detail and Sales Quick Start remain in parity for shared estimating workflows, or any intentional drift is documented.
 - [ ] Any required doc updates are included in the same change set.
 - [ ] SQL tables preserve created/updated audit fields.
 - [ ] Runtime auth config assumptions are preserved.

@@ -6,6 +6,7 @@ CREATE TABLE [dbo].[materialAttributes](
 	[projectId] [nvarchar](40) NULL,
 	[valueType] [nvarchar](40) NULL,
 	[defaultValue] [nvarchar](255) NULL,
+	[isReadOnly] [bit] NOT NULL,
 	[ordinal] [smallint] NOT NULL,
 	[createat] [date] NOT NULL,
 	[createby] [nvarchar](40) NOT NULL,
@@ -25,6 +26,9 @@ GO
 ALTER TABLE [dbo].[materialAttributes] ADD  DEFAULT ((0)) FOR [ordinal]
 GO
 
+ALTER TABLE [dbo].[materialAttributes] ADD  DEFAULT ((0)) FOR [isReadOnly]
+GO
+
 ALTER TABLE [dbo].[materialAttributes] ADD  DEFAULT (getdate()) FOR [createat]
 GO
 
@@ -36,4 +40,3 @@ GO
 
 ALTER TABLE [dbo].[materialAttributes] ADD  DEFAULT ('system') FOR [updateby]
 GO
-

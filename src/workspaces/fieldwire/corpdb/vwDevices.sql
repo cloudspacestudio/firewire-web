@@ -1,7 +1,7 @@
 CREATE VIEW [dbo].[vwDevices]
 AS
-SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryName, dbo.devices.includeOnFloorplan, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost,
-                  dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.iconId, dbo.deviceIcons.label AS iconLabel, dbo.deviceIcons.dataUrl AS iconDataUrl, dbo.devices.iconForegroundColor, dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
+SELECT dbo.devices.deviceId, dbo.devices.name, dbo.devices.shortName, dbo.devices.categoryName, dbo.devices.includeOnFloorplan, dbo.devices.floorplanLabelText, dbo.devices.vendorId, dbo.vendors.name AS vendorName, dbo.devices.partNumber, dbo.devices.cost,
+                  dbo.devices.defaultLabor, dbo.devices.laborRate, dbo.devices.iconId, dbo.deviceIcons.label AS iconLabel, dbo.deviceIcons.dataUrl AS iconDataUrl, dbo.devices.iconForegroundColor, dbo.devices.slcAddress, dbo.devices.serialNumber, dbo.devices.strobeAddress, dbo.devices.speakerAddress, dbo.devices.areaOfInfluence, dbo.devices.createat, dbo.devices.createby, dbo.devices.updateat, dbo.devices.updateby,
                   ISNULL(attributeCounts.attributeCount, 0) AS attributeCount, ISNULL(subTaskCounts.subTaskCount, 0) AS subTaskCount
 FROM     dbo.devices INNER JOIN
                   dbo.vendors ON dbo.devices.vendorId = dbo.vendors.vendorId LEFT OUTER JOIN

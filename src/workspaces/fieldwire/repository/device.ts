@@ -4,6 +4,7 @@ export interface Device {
     shortName?: string
     categoryName: string
     includeOnFloorplan?: boolean
+    floorplanLabelText?: string | null
     vendorId: string
     partNumber: string
     link: string
@@ -16,4 +17,5 @@ export interface Device {
     serialNumber: string
     strobeAddress: string
     speakerAddress: string
+    areaOfInfluence: string
 }

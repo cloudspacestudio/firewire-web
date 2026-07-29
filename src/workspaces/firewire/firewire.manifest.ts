@@ -17,11 +17,6 @@ export default class FirewireManifest extends BaseManifest {
         this.items.push(...FirewireProjectSettingsData.manifestItems)
         this.items.push(...FirewireProjectsData.manifestItems)
         this.items.push(...FirewireUserPreferencesData.manifestItems)
-        this.items.push(...FirewireAboutData.legacyFieldwireAliasItems)
-        this.items.push(...FirewireData.legacyFieldwireAliasItems)
-        this.items.push(...FirewireProjectSettingsData.legacyFieldwireAliasItems)
-        this.items.push(...FirewireProjectsData.legacyFieldwireAliasItems)
-        this.items.push(...FirewireUserPreferencesData.legacyFieldwireAliasItems)
     }
 
     appname: string = 'firewireapi'

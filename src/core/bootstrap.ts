@@ -130,6 +130,7 @@ export class Bootstrap {
                 if (!routeless) {
                     await this.initializeTokenValidation()
                     app.use('/api', this.apiBearerLogger)
+                    app.use('/api', this.apiResponseLogger)
 
                     console.log(`miSSion.webserver: initializing workspace routes`)
                     const resolver: RouteResolver = new RouteResolver(path.join(process.cwd(), 'src', 'workspaces'))
@@ -317,6 +318,29 @@ export class Bootstrap {
             })
             return
         }
+    }
+
+    private apiResponseLogger: express.RequestHandler = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+        const originalJson = res.json.bind(res)
+        let responseBody: any
+
+        res.json = ((body?: any): express.Response => {
+            responseBody = body
+            return originalJson(body)
+        }) as typeof res.json
+
+        res.on('finish', () => {
+            if (res.statusCode < 500) {
+                return
+            }
+
+            const message = responseBody && responseBody.message
+                ? `: ${responseBody.message}`
+                : ''
+            console.error(`api error: ${req.method} ${req.originalUrl} -> ${res.statusCode}${message}`)
+        })
+
+        next()
     }
 
     private resolveRequiredScopes(): string[] {

@@ -5,7 +5,7 @@
 The workspace root contains two main applications:
 
 - `firewire-web`: Node/Express middleware API written in TypeScript.
-- `firewire-ui`: Angular 19 SPA using standalone components and Angular Material.
+- `firewire-ui`: Angular 22 SPA using standalone components and Angular Material.
 
 `firewire-web` has its own Git repository in `firewire-web/.git`. The agent docs live under `firewire-web/agent-docs` so they are source controlled with the backend repo.
 
@@ -48,6 +48,7 @@ Firewire routes include:
 - project settings
 - user preferences
 - device, part, vendor, import, device set, workspace storage, and document-library APIs
+- SharePoint, Azure Maps/weather, tenants, and other Firewire-owned support APIs
 
 Fieldwire routes include:
 
@@ -55,9 +56,9 @@ Fieldwire routes include:
 - projects
 - tasks
 - forms
-- project documents
-- AWS/temporary upload support
-- SharePoint support
+- AWS/temporary upload support used by direct Fieldwire flows
+
+`/api/fieldwire/*` is reserved for endpoints whose primary job is direct Fieldwire integration. Firewire-owned app/domain endpoints must use `/api/firewire/*`, even when they participate in a later Fieldwire import/export workflow. Do not add blanket legacy `/api/fieldwire` aliases for Firewire manifest items.
 
 The global `/api` middleware validates bearer tokens before manifest routes run. Individual manifests currently set `AuthStrategy.none`; this does not mean `/api` is unauthenticated because validation happens globally in `Bootstrap`.
 
@@ -104,6 +105,7 @@ Patterns:
 - standalone components
 - lazy route components
 - Angular Material
+- Angular CLI 22 `@angular/build` application, dev-server, extract-i18n, and Karma builders
 - `HttpClient` with an auth interceptor
 - common schemas under `src/app/schemas`
 - common components/services under `src/app/common`
@@ -123,6 +125,6 @@ Important shared UI pieces:
 The UI primarily calls:
 
 - `/api/firewire/*` for Firewire domain workflows.
-- `/api/fieldwire/*` for Fieldwire integration and legacy endpoints.
+- `/api/fieldwire/*` only for direct Fieldwire integration endpoints.
 
 Existing response shapes vary between `{ rows: [...] }`, `{ data: ... }`, and direct object responses. For new endpoints, prefer the local nearby convention, but use `{ data }` for single resources/commands and `{ rows }` for lists.

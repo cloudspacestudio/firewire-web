@@ -96,19 +96,6 @@ export class FirewireUserPreferencesData {
             }
         }
     ]
-
-    static legacyFieldwireAliasItems = FirewireUserPreferencesData.manifestItems.map((item) => {
-        const normalizedMethod = item.method.toLowerCase()
-        const method = normalizedMethod === 'get' || normalizedMethod === 'post' || normalizedMethod === 'put' || normalizedMethod === 'patch' || normalizedMethod === 'delete'
-            ? normalizedMethod
-            : 'get'
-
-        return {
-            ...item,
-            method,
-            path: item.path.replace('/api/firewire/', '/api/fieldwire/')
-        }
-    })
 }
 
 function normalizePayload(body: any): FirewireUserPreferencesPayload {

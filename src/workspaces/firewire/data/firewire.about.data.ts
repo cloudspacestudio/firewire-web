@@ -29,11 +29,6 @@ export class FirewireAboutData {
             }
         }
     ]
-
-    static legacyFieldwireAliasItems = FirewireAboutData.manifestItems.map((item) => ({
-        ...item,
-        path: item.path.replace('/api/firewire/', '/api/fieldwire/')
-    }))
 }
 
 function buildAboutResponse(req: express.Request) {

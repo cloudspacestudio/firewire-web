@@ -21,7 +21,7 @@ export default class FieldwireManifest extends BaseManifest {
 
     items: IManifestItem[] = [{
         method: 'get',
-        path: '/api/tenants',
+        path: '/api/firewire/tenants',
         fx: (req: express.Request, res: express.Response) => {
             return new Promise(async(resolve, reject) => {
                 try {

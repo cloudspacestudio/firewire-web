@@ -22,7 +22,7 @@ export default class SpotlightManifest extends BaseManifest {
 
     items: IManifestItem[] = [{
         method: 'get',
-        path: '/api/spotlights',
+        path: '/api/firewire/spotlights',
         fx: (req: express.Request, res: express.Response) => {
             return new Promise(async(resolve, reject) => {
                 try {
@@ -41,7 +41,7 @@ export default class SpotlightManifest extends BaseManifest {
     },
     {
         method: 'get',        
-        path: '/api/spotlights/:id',
+        path: '/api/firewire/spotlights/:id',
         fx: (req: express.Request, res: express.Response) => {
             return new Promise(async(resolve, reject) => {
                 try {

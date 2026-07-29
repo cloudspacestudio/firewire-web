@@ -2304,20 +2304,6 @@ export class FirewireData {
             }
         }
     ]
-
-    static legacyFieldwireAliasItems = FirewireData.manifestItems.map((item) => {
-        const normalizedMethod = item.method.toLowerCase()
-        const method = normalizedMethod === 'get' || normalizedMethod === 'post' || normalizedMethod === 'put' || normalizedMethod === 'patch' || normalizedMethod === 'delete'
-            ? normalizedMethod
-            : 'get'
-
-        return {
-            ...item,
-            method,
-            path: item.path.replace('/api/firewire/', '/api/fieldwire/')
-        }
-    })
-
     private static async resolveEdwardsVendor(sqldb: SqlDb): Promise<Vendor | null> {
         const vendors = await sqldb.getVendors()
         return vendors.find((row) => /edwards|edward/i.test(String(row.name || ''))) || null

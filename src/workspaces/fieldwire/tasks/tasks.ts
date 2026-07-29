@@ -240,7 +240,7 @@ export class FieldwireTasks {
     static seedFromTestDevices() {
         return {
             method: 'post',
-            path: '/api/fieldwire/projects/:projectId/seedtestdevices',
+            path: '/api/firewire/projects/:projectId/seed-test-devices',
             fx: (req: express.Request, res: express.Response) => {
                 const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {

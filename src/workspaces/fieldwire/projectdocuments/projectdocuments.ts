@@ -17,7 +17,7 @@ export class FieldwireProjectDocuments {
     static uploadProjectDocument() {
         return {
             method: 'post',
-            path: '/api/fieldwire/projects/:projectId/projectdocuments/upload',
+            path: '/api/firewire/projects/:projectId/projectdocuments/upload',
             fx: async (req: express.Request, res: express.Response) => {
                 try {
                     const bearerToken = this.resolveBearerToken(req)

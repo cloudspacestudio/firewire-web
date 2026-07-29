@@ -20,7 +20,7 @@ export class FieldwireSharePoint {
     static uploadDocument() {
         return {
             method: 'post',
-            path: '/api/fieldwire/sharepoint/upload',
+            path: '/api/firewire/sharepoint/upload',
             fx: async (req: express.Request, res: express.Response) => {
                 try {
                     const bearerToken = this.resolveBearerToken(req)
@@ -95,7 +95,7 @@ export class FieldwireSharePoint {
     static listLibraryItems() {
         return {
             method: 'get',
-            path: '/api/fieldwire/sharepoint/library',
+            path: '/api/firewire/sharepoint/library',
             fx: async (req: express.Request, res: express.Response) => {
                 try {
                     const bearerToken = this.resolveBearerToken(req)
@@ -137,7 +137,7 @@ export class FieldwireSharePoint {
     static createFolder() {
         return {
             method: 'post',
-            path: '/api/fieldwire/sharepoint/folders',
+            path: '/api/firewire/sharepoint/folders',
             fx: async (req: express.Request, res: express.Response) => {
                 try {
                     const bearerToken = this.resolveBearerToken(req)
@@ -179,7 +179,7 @@ export class FieldwireSharePoint {
     static readFile() {
         return {
             method: 'get',
-            path: '/api/fieldwire/sharepoint/file',
+            path: '/api/firewire/sharepoint/file',
             fx: async (req: express.Request, res: express.Response) => {
                 try {
                     const bearerToken = this.resolveBearerToken(req)

@@ -33,7 +33,7 @@ export class FieldwireProjects {
         // Get as HTML Table
         {
             method: 'get',
-            path: '/api/data/fieldwire/projects/:projectId/floorplans',
+            path: '/api/fieldwire/projects/:projectId/floorplans/html',
             fx: (req: express.Request, res: express.Response) => {
                 const fieldwire: FieldwireSDK = req.app.locals.fieldwire
                 return new Promise(async(resolve, reject) => {

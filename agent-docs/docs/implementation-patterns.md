@@ -15,6 +15,8 @@ Typical shape:
 
 Keep route handlers small. Put SQL and transformation logic in repositories or focused helper functions.
 
+API responses with status `500` or higher are logged centrally by Bootstrap after bearer validation. Route handlers may still return JSON errors directly, but do not suppress useful error messages; include a clear `message` field so the central API log line is actionable.
+
 ## SQL Pattern
 
 Preferred for new writes:
@@ -187,6 +189,12 @@ All Angular Material dialogs should follow the shared Firewire dialog convention
 - Form/table/list dialogs should fit their actual content instead of stretching into unused empty surface area. Do not set a hardcoded `width` in `MatDialog.open()` unless the content genuinely needs that exact width. Prefer `panelClass: 'fw-fit-content-dialog-pane'` and let the component host/content define `width: fit-content`, `max-width`, and any real `min-width` required for readable table columns. Exception: if dialog content expands after a user action, such as search results populating a table, reserve the final table width up front so the dialog does not jump from compact to wide while the user is typing.
 - Delete and destructive action buttons must be red so users have a visual warning before destructive actions. Prefer `color="warn"` on Angular Material buttons and add `fw-danger-button` or `fw-delete-button` when a shared explicit class is clearer. Destructive `mat-menu-item` actions should use `fw-danger-menu-item` or `fw-delete-menu-item`.
 
+## API Namespace Ownership
+
+Use `/api/fieldwire/*` only for thin routes whose primary behavior is direct Fieldwire integration through `FieldwireSDK` or Fieldwire upload helpers. Use `/api/firewire/*` for Firewire app/domain workflows, settings, devices, parts, project documents, SharePoint/Microsoft Graph, Azure Maps/weather, user preferences, tenants, and any Firewire-owned workflow that may later export to Fieldwire.
+
+Do not add blanket `/api/fieldwire` aliases for Firewire manifest items. When renaming or consolidating endpoints, update all Angular call sites in the same change. If a temporary compatibility route is unavoidable, make it route-specific, document the deprecation, and remove it once callers have moved.
+
 ## Response Compatibility
 
-The app has legacy `/api/fieldwire/*` routes and newer `/api/firewire/*` routes. Some Firewire manifest classes expose legacy Fieldwire alias items. When renaming or consolidating endpoints, preserve aliases or update all Angular call sites in the same change.
+Existing response shapes vary between legacy `/api/fieldwire/*` routes and newer `/api/firewire/*` routes. Preserve nearby response shape conventions unless intentionally changing all call sites in the same change.

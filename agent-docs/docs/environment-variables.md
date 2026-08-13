@@ -48,6 +48,15 @@ SharePoint integration code also supports optional `SHAREPOINT_SITE_ID`, `SHAREP
 
 Used by `AzureBlobDocumentStorage` for project document content. SQL/workspace storage should retain metadata and blob pointers, not raw file bodies, for new flows.
 
+## OpenAI Document Analysis
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_TIMEOUT_MS`
+- `DOCUMENT_INSPECTION_MAX_RUNTIME_MS`
+
+`OPENAI_API_KEY` and `OPENAI_MODEL` are required to run document inspection. Both are server-only; never expose either value through Angular configuration, API responses, logs, or committed files. `OPENAI_TIMEOUT_MS` is optional and defaults to 180000 milliseconds for an individual SDK request. `DOCUMENT_INSPECTION_MAX_RUNTIME_MS` is optional and defaults to 300000 milliseconds; status reads use it as a terminal safety lease for a running inspection.
+
 ## Primary SQL Server
 
 - `SQLSRV`

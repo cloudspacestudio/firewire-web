@@ -106,6 +106,8 @@ For floorplan-enabled device rows, snapshot `deviceId`, `floorplanLabelText`, `s
 
 When a BOM symbol is placed onto a floorplan, copy the BOM row's attributes, tags, and media metadata onto the annotation. The floorplan selected-symbol rail may edit the annotation's attributes and tags. BOM-to-floorplan sync should seed missing metadata for older annotations but must not overwrite existing annotation metadata, because placed symbols are intentionally decoupled after placement.
 
+Document-derived device counts must preserve four separate concepts: the quantity stated in a device schedule, the quantity counted from drawing symbols, the reconciled BOM quantity approved by a user, and the intended floorplan placement target. A schedule/drawing disagreement is a conflict and must not be silently resolved. When document analysis eventually creates a BOM row, persist its approved placement target separately from the live count of placed annotations and link every generated annotation through the stable BOM row id. Creating 18 units on a BOM must therefore establish a target of 18 placements; automation is complete only when 18 linked annotations exist or the user explicitly revises the target. Do not let a zero or partial placed-symbol count overwrite that approved quantity.
+
 BOM `partNbr` is free-form user text. The lookup should help users select catalog parts/devices, but saving a BOM row must not require the part number to exist in `parts`, devices, or any vendor list. Preserve any typed part number and description exactly as user-entered worksheet content.
 
 BOM money values are stored and displayed as whole dollars rounded up with `Math.ceil`. Apply this to BOM cost, labor, extended cost, extended labor, totals, and CSV export in both Sales Quick Start and Project Detail BOM surfaces.
@@ -138,7 +140,7 @@ Project Take Off rows must display the exact corresponding floorplan `name`. Do 
 
 Floorplan tile rename inputs should keep local draft text while the user is typing and persist only on blur/commit. Do not mutate the backing `file.name` on every keystroke, because floorplan lists sort by display name and live mutation makes tiles move while users edit. Show tile-level save progress when persisting a rename or a saved floorplan design.
 
-Floorplan symbols are driven by BOM rows with `includeOnFloorplan=true`; symbol placement is not constrained by the current BOM quantity. Users may place a symbol as many times as needed across one or many floorplans. When a floorplan design is saved, the aggregate placement count for each symbol across all project floorplans becomes the BOM row quantity. Removing a symbol from any floorplan reduces that aggregate quantity on the matching BOM row. Keep the BOM quantity read-only for FP-enabled rows because the floorplan placements are the source of truth.
+Floorplan symbols are driven by BOM rows with `includeOnFloorplan=true`. For ordinary/manual rows, placement is not constrained by the current BOM quantity: the aggregate placement count across all project floorplans becomes the row quantity when a design is saved. For approved document-analysis rows, `quantitySource=document-analysis` and `floorplanQuantityTarget` make the approved BOM quantity the source of truth. Report placed-versus-target progress, refuse placement above the target, and do not let zero or partial placements overwrite the approved row quantity.
 
 When syncing floorplans and BOMs, use the BOM row id as the only placement relationship. Category/type, part number, and description are display/snapshot fields and can change; those changes should propagate onto existing floorplan symbols without orphaning them or requiring users to delete/re-place marks.
 
@@ -165,6 +167,12 @@ Document library metadata and folder state are stored through `/api/firewire/sto
 
 Default folders live in `ProjectDocLibraryStorageService` and include CAD, O&M, project management, sales, submittal, customer drawings, change orders, inspection reports, and related subfolders.
 
+Per-document AI inspection may persist proposed project-detail actions alongside its findings in the separate `project-document-analysis` workspace area. Proposals are review artifacts, not project state: they must preserve current/proposed values and document provenance. A user may select and explicitly apply proposals; the server then updates the canonical project or `worksheetData.customerInfo`, records the source document and changed labels in project activity, and stores application metadata on the analysis record. Already-applied actions remain identifiable during later review.
+
+Per-document BOM proposals are also review artifacts. Explicitly applying eligible proposals creates independent snapshot rows under the `document-analysis` BOM section. Each imported row retains the analysis/proposal/document identifiers, approved quantity, quantity source, and placement target. Exact reusable-device matches snapshot the device and linked parts; exact master-part matches create BOM-only rows. Ambiguous, missing, or quantity-conflict proposals require human resolution and cannot be applied directly.
+
+The canonical project `address` represents the project/job-site location. Customer Info `billingAddress` represents the customer's accounting address and may legitimately differ or remain blank. Document analysis must target these fields independently and applying a Project Address proposal must not implicitly populate Billing Address.
+
 ## Vendors And Part Imports
 
 Part list imports use one universal vendor-configurable flow. Imports preview, snapshot, replace, restore, and run tracking through the vendor parts import endpoints, and every imported row lands in `parts`.
@@ -178,6 +186,10 @@ Fieldwire is a third-party construction planning system. Firewire can plan and e
 Floorplan uploads to Fieldwire may be accepted before Fieldwire has finished preparing the sheet for task placement. Import execution should wait and retry after floorplan creation before creating floorplan tasks. The current backend flow retries task placement for the first symbol on the floorplan every 5 seconds for up to 20 attempts, then continues with the rest of that floorplan's tasks once the first placement succeeds.
 
 Fieldwire task import matching must use both task name and floorplan position. Multiple Firewire symbols can legitimately create Fieldwire tasks with the same display name on the same floorplan; matching only by name can make later symbols look imported when only one placement exists.
+
+Direct Fieldwire task activity reads belong under `/api/fieldwire/*`. The install detail page uses `GET /api/fieldwire/projects/:projectId/task-status-changes` to gather project-specific Fieldwire statuses, query tasks that changed to each status in a date range, fetch each task's default detail record, and return flat status-change rows for recent activity views.
+
+Firewire stores an optional linked Fieldwire project id on `firewireProjects.fieldwireId`. Use `PATCH /api/firewire/projects/firewire/:projectId/fieldwire-map` to update or clear only that link. If Fieldwire reports the linked project as not found, Project Details and the Firewire import flow should clear the stale link before planning another import.
 
 Relevant code:
 

@@ -8,6 +8,7 @@ import { FirewireAboutData } from './data/firewire.about.data'
 import { FirewireProjectSettingsData } from './data/firewire.project-settings.data'
 import { FirewireProjectsData } from './data/firewire.projects.data'
 import { FirewireUserPreferencesData } from './data/firewire.user-preferences.data'
+import { FirewireDocumentAnalysisData } from './data/firewire.document-analysis.data'
 
 export default class FirewireManifest extends BaseManifest {
     constructor() {
@@ -17,6 +18,7 @@ export default class FirewireManifest extends BaseManifest {
         this.items.push(...FirewireProjectSettingsData.manifestItems)
         this.items.push(...FirewireProjectsData.manifestItems)
         this.items.push(...FirewireUserPreferencesData.manifestItems)
+        this.items.push(...FirewireDocumentAnalysisData.manifestItems)
     }
 
     appname: string = 'firewireapi'

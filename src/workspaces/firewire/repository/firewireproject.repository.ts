@@ -431,7 +431,12 @@ export class FirewireProjectRepository {
         return created
     }
 
-    async updateFirewireProject(projectId: string, input: FirewireProjectInput, userId: string): Promise<FirewireProjectRecord | null> {
+    async updateFirewireProject(
+        projectId: string,
+        input: FirewireProjectInput,
+        userId: string,
+        activitySummary?: string
+    ): Promise<FirewireProjectRecord | null> {
         await this.ensureTable()
         if (!validateUuid(projectId)) {
             return null
@@ -505,7 +510,8 @@ export class FirewireProjectRepository {
         }
 
         const updated = await this.getFirewireProject(projectId)
-        const summary = this.summarizeProjectChanges(existingProject, updated || undefined)
+        const summary = String(activitySummary || '').trim()
+            || this.summarizeProjectChanges(existingProject, updated || undefined)
         await this.insertProjectActivity(projectId, summary, userId)
 
         return this.getFirewireProject(projectId)
@@ -946,11 +952,11 @@ export class FirewireProjectRepository {
         const subscriptionKey = (process.env.AZURE_MAPS_SUBSCRIPTION_KEY || process.env.AZURE_MAPS_KEY || '').trim()
         if (!subscriptionKey) {
             return {
-                address: existingProject?.address || normalizedAddress,
-                latitude: existingProject?.latitude ?? null,
-                longitude: existingProject?.longitude ?? null,
-                geocodeStatus: DEFAULT_GEOCODE_STATUS,
-                geocodedAt: existingProject?.geocodedAt || null
+                address: normalizedAddress,
+                latitude: addressChanged ? null : existingProject?.latitude ?? null,
+                longitude: addressChanged ? null : existingProject?.longitude ?? null,
+                geocodeStatus: addressChanged ? DEFAULT_GEOCODE_STATUS : existingProject?.geocodeStatus || DEFAULT_GEOCODE_STATUS,
+                geocodedAt: addressChanged ? null : existingProject?.geocodedAt || null
             }
         }
 
@@ -968,19 +974,19 @@ export class FirewireProjectRepository {
 
             if (!response.ok) {
                 return {
-                    address: existingProject?.address || normalizedAddress,
-                    latitude: existingProject?.latitude ?? null,
-                    longitude: existingProject?.longitude ?? null,
+                    address: normalizedAddress,
+                    latitude: addressChanged ? null : existingProject?.latitude ?? null,
+                    longitude: addressChanged ? null : existingProject?.longitude ?? null,
                     geocodeStatus: 'Error',
-                    geocodedAt: existingProject?.geocodedAt || null
+                    geocodedAt: addressChanged ? null : existingProject?.geocodedAt || null
                 }
             }
 
             const payload = await response.json() as any
             const bestResult = Array.isArray(payload?.results) ? payload.results[0] : null
             const standardizedAddress =
-                this.optionalString(bestResult?.address?.freeformAddress, 500)
-                || this.buildStandardizedAddress(bestResult?.address)
+                this.buildStandardizedAddress(bestResult?.address)
+                || this.optionalString(bestResult?.address?.freeformAddress, 500)
                 || normalizedAddress
             const latitude = bestResult?.position?.lat
             const longitude = bestResult?.position?.lon
@@ -1005,7 +1011,7 @@ export class FirewireProjectRepository {
             }
 
             return {
-                address: standardizedAddress,
+                address: normalizedAddress,
                 latitude,
                 longitude,
                 geocodeStatus: 'Mapped',
@@ -1013,11 +1019,11 @@ export class FirewireProjectRepository {
             }
         } catch {
             return {
-                address: existingProject?.address || normalizedAddress,
-                latitude: existingProject?.latitude ?? null,
-                longitude: existingProject?.longitude ?? null,
+                address: normalizedAddress,
+                latitude: addressChanged ? null : existingProject?.latitude ?? null,
+                longitude: addressChanged ? null : existingProject?.longitude ?? null,
                 geocodeStatus: 'Error',
-                geocodedAt: existingProject?.geocodedAt || null
+                geocodedAt: addressChanged ? null : existingProject?.geocodedAt || null
             }
         }
     }

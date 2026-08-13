@@ -99,6 +99,8 @@ Each BOM row should have a durable `bomRowId` or `id`. Suggested fields:
 - `partNbr`
 - `description`
 - `quantity`
+- `floorplanQuantityTarget` nullable; an approved/imported placement target that is distinct from placed annotation count
+- `quantitySource` nullable (`manual`, `document-analysis`, `floorplan-count`, or another explicit source)
 - `cost`
 - `labor`
 - `categoryName`/`type`
@@ -113,6 +115,9 @@ Rules:
 - BOM rows selected directly from parts default `includeOnFloorplan=false`.
 - Free-form BOM rows default `includeOnFloorplan=false`.
 - BOM rows created from devices default `includeOnFloorplan` from the device.
+- Document-analysis imports must preserve the approved BOM quantity and `floorplanQuantityTarget`; zero or partial placed-symbol counts must not overwrite either value.
+- Document-analysis BOM application is implemented for explicitly approved, exact device/master-part matches. Imported rows retain stable analysis/proposal/document provenance and idempotent application history; part-only rows are not floorplan-ready.
+- Floorplan placement progress is the count of annotations linked by stable `bomRowId`. Automated placement is complete only when that count equals `floorplanQuantityTarget`, unless the user explicitly changes the target.
 - BOM row money values should continue to follow the current whole-dollar BOM display/storage rule.
 
 ### bomRowParts

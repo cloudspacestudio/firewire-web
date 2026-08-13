@@ -26,6 +26,7 @@ export class FieldwireTasks {
         FieldwireTasks.seedFromTestDevices(),
         FieldwireTasks.getFloorplanTasks(),
         FieldwireTasks.taskFilterByStatus(),
+        FieldwireTasks.getTaskStatusChangesWithDetails(),
         FieldwireTasks.getTaskDetail(),
         FieldwireTasks.getRelatedTasks()
     ]
@@ -233,6 +234,76 @@ export class FieldwireTasks {
                 })
             }
         }
+    }
+
+    static getTaskStatusChangesWithDetails() {
+        return {
+            method: 'get',
+            path: '/api/fieldwire/projects/:projectId/task-status-changes',
+            fx: (req: express.Request, res: express.Response) => {
+                const fieldwire: FieldwireSDK = req.app.locals.fieldwire
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = req.params.projectId
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid Payload: Missing projectId parameter'
+                            })
+                        }
+
+                        const dateRange = FieldwireTasks.resolveDateRange(req.query.startDate, req.query.endDate)
+                        const result = await fieldwire.taskStatusChangesWithDetails(projectId, dateRange.startDate, dateRange.endDate)
+                        res.status(200).json({
+                            rows: result.rows,
+                            data: {
+                                projectId,
+                                startDate: dateRange.startDate,
+                                endDate: dateRange.endDate,
+                                count: result.rows.length,
+                                statusCount: result.statusScan.length,
+                                statusScan: result.statusScan
+                            }
+                        })
+                        return resolve(true)
+                    } catch (err: Error|any) {
+                        const message = err && err.message ? err.message : err
+                        const statusCode = String(message || '').startsWith('Invalid date') ? 400 : 500
+                        res.status(statusCode).json({
+                            message
+                        })
+                        return resolve(err)
+                    }
+                })
+            }
+        }
+    }
+
+    private static resolveDateRange(startDateInput: any, endDateInput: any): { startDate: string, endDate: string } {
+        const now = new Date()
+        const startDate = FieldwireTasks.parseOptionalDate(startDateInput) || new Date(now.getTime() - (72 * 60 * 60 * 1000))
+        const endDate = FieldwireTasks.parseOptionalDate(endDateInput) || new Date(now.getTime() + (24 * 60 * 60 * 1000))
+        if (startDate.getTime() > endDate.getTime()) {
+            throw new Error('Invalid date range: startDate must be before endDate.')
+        }
+        return {
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString()
+        }
+    }
+
+    private static parseOptionalDate(value: any): Date | null {
+        if (Array.isArray(value)) {
+            value = value[0]
+        }
+        const raw = String(value || '').trim()
+        if (!raw) {
+            return null
+        }
+        const parsed = new Date(raw)
+        if (Number.isNaN(parsed.getTime())) {
+            throw new Error(`Invalid date value: ${raw}`)
+        }
+        return parsed
     }
 
 

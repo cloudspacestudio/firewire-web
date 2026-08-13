@@ -34,6 +34,8 @@ Canonical fields:
 
 `vwParts` exposes canonical SQL column names only. SQL Server treats column names case-insensitively, so do not add Pascal-case aliases directly to the view. Repository methods add temporary API compatibility aliases (`PartNumber`, `LongDescription`, `MSRPPrice`, `SalesPrice`, etc.) before returning rows. `SalesPrice` maps to `parts.cost`; do not create a new sales-price column.
 
+The Parts page must provide an explicit all-vendors selection backed by `GET /api/firewire/parts`. Its text search should cover normalized part number, description, parent category, category, UPC, brand, vendor name, and source vendor name across that combined dataset. Normalize punctuation for lookup so equivalent searches such as `N-ANN-80` and `NANN80` can resolve the same part number.
+
 ## Import Flow
 
 Vendor import config, preview, snapshot, restore, and run tracking all target `parts`.

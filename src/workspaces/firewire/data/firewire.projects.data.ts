@@ -108,9 +108,11 @@ export class FirewireProjectsData {
                         })
                     }
 
+                    const userId = resolveUserId(req)
                     const fieldwire = req.app.locals.fieldwire as FieldwireSDK
                     const sqldb = new SqlDb(req.app)
-                    const plan = await buildFieldwireImportPlan(fieldwire, sqldb, project)
+                    const reconciledProject = await clearStaleFieldwireMapping(fieldwire, repository, project, userId)
+                    const plan = await buildFieldwireImportPlan(fieldwire, sqldb, reconciledProject)
                     return res.status(200).json({
                         data: plan
                     })
@@ -144,7 +146,8 @@ export class FirewireProjectsData {
 
                     const fieldwire = req.app.locals.fieldwire as FieldwireSDK
                     const sqldb = new SqlDb(req.app)
-                    const result = await executeFieldwireImport(fieldwire, sqldb, repository, project, userId)
+                    const reconciledProject = await clearStaleFieldwireMapping(fieldwire, repository, project, userId)
+                    const result = await executeFieldwireImport(fieldwire, sqldb, repository, reconciledProject, userId)
                     return res.status(200).json({
                         data: result,
                         message: result.message
@@ -366,6 +369,40 @@ export class FirewireProjectsData {
 
                         const repository = new FirewireProjectRepository(req.app)
                         const result = await repository.getFirewireProject(projectId)
+                        if (!result) {
+                            return res.status(404).json({
+                                message: 'Project not found.'
+                            })
+                        }
+
+                        return res.status(200).json({
+                            data: result
+                        })
+                    } catch (err: Error | any) {
+                        return res.status(500).json({
+                            message: err && err.message ? err.message : err
+                        })
+                    }
+                })
+            }
+        },
+        {
+            method: 'patch',
+            path: '/api/firewire/projects/firewire/:projectId/fieldwire-map',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async(resolve, reject) => {
+                    try {
+                        const projectId = String(req.params.projectId || '').trim()
+                        if (!projectId) {
+                            return res.status(400).json({
+                                message: 'Invalid payload: missing projectId parameter.'
+                            })
+                        }
+
+                        const userId = resolveUserId(req)
+                        const payload = normalizeFieldwireMapPayload(req.body)
+                        const repository = new FirewireProjectRepository(req.app)
+                        const result = await repository.updateFieldwireMapping(projectId, payload, userId)
                         if (!result) {
                             return res.status(404).json({
                                 message: 'Project not found.'
@@ -1130,6 +1167,30 @@ async function executeFieldwireImport(
     }
 }
 
+async function clearStaleFieldwireMapping(
+    fieldwire: FieldwireSDK,
+    repository: FirewireProjectRepository,
+    project: FirewireProjectRecord,
+    userId: string
+): Promise<FirewireProjectRecord> {
+    const fieldwireId = String(project.fieldwireId || '').trim()
+    if (!fieldwireId) {
+        return project
+    }
+
+    const accountProjects = await fieldwire.accountProjects()
+    const linkedProjectExists = (accountProjects as any[]).some((item: any) => String(item?.id || '') === fieldwireId)
+    if (linkedProjectExists) {
+        return project
+    }
+
+    const updated = await repository.updateFieldwireMapping(project.uuid, { fieldwireId: null }, userId)
+    return updated || {
+        ...project,
+        fieldwireId: null
+    }
+}
+
 async function waitForFieldwireFloorplanTaskReadiness(
     fieldwire: FieldwireSDK,
     fieldwireProjectId: string,
@@ -1393,15 +1454,33 @@ async function ensureFieldwireFloorplanName(fieldwire: FieldwireSDK, projectId: 
 }
 
 function calculateFieldwirePosition(fieldwireFloorplan: any, symbol: any): { posX: number, posY: number } {
-    const sheet = Array.isArray(fieldwireFloorplan?.sheets) ? fieldwireFloorplan.sheets[0] : fieldwireFloorplan?.current_sheet
-    const fileWidth = toFiniteNumber(sheet?.file_width) || toFiniteNumber(sheet?.width) || 1
-    const fileHeight = toFiniteNumber(sheet?.file_height) || toFiniteNumber(sheet?.height) || 1
-    const xRatio = toFiniteNumber(symbol.xRatio) || 0
-    const yRatio = toFiniteNumber(symbol.yRatio) || 0
+    const sheet = getFieldwireFloorplanSheets(fieldwireFloorplan).find((candidate: any) => {
+        const width = toFiniteNumber(candidate?.file_width) || toFiniteNumber(candidate?.width)
+        const height = toFiniteNumber(candidate?.file_height) || toFiniteNumber(candidate?.height)
+        return !!width && !!height
+    }) || null
+    const fileWidth = toFiniteNumber(sheet?.file_width) || toFiniteNumber(sheet?.width)
+    const fileHeight = toFiniteNumber(sheet?.file_height) || toFiniteNumber(sheet?.height)
+    if (!sheet || !fileWidth || !fileHeight || fileWidth <= 1 || fileHeight <= 1) {
+        throw new Error(`Fieldwire floorplan ${fieldwireFloorplan?.name || fieldwireFloorplan?.id || ''} does not have usable sheet dimensions for task placement yet.`)
+    }
+    const xRatio = normalizePositionRatio(symbol.xRatio)
+    const yRatio = normalizePositionRatio(symbol.yRatio)
     return {
         posX: Math.round(fileWidth * xRatio),
         posY: Math.round(fileHeight * yRatio)
     }
+}
+
+function normalizePositionRatio(value: any): number {
+    const numeric = toFiniteNumber(value)
+    if (numeric === null) {
+        return 0
+    }
+    if (numeric > 1) {
+        return numeric / 100
+    }
+    return numeric
 }
 
 function findExistingFieldwireTaskForSymbol(existingTasks: any[], taskName: string, fieldwireFloorplan: any, symbol: any): any | null {

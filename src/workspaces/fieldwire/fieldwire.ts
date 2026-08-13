@@ -676,16 +676,74 @@ export class FieldwireSDK {
     public async taskFilterByStatus(projectId: string, statusId: string, startDate: string, endDate: string): Promise<ProjectTaskSchema[]> {
         return new Promise(async (resolve, reject) => {
             try {
-                //const startString = startDate.toISOString().split('T')[0]
-                //const endString = endDate.toISOString().split('T')[0]
-                const result = await this.get(`projects/${projectId}/tasks/filter_by_status?end_date=${endDate}&start_date=${startDate}&status_id=${statusId}`, {
-                    'Fieldwire-Filter': 'active'
+                const query = [
+                    `filters[status_id_eq]=${encodeURIComponent(statusId)}`,
+                    `filters[updated_at_gte]=${encodeURIComponent(startDate)}`,
+                    `filters[updated_at_lte]=${encodeURIComponent(endDate)}`
+                ].join('&')
+                const result = await this.get(`projects/${projectId}/tasks?${query}`, {
+                    'Fieldwire-Filter': 'active',
+                    'Fieldwire-Per-Page': 1000
                 })
                 return resolve(result)
             } catch (err) {
                 return reject(err)
             }
         });
+    }
+    public async taskStatusChangesWithDetails(projectId: string, startDate: string, endDate: string): Promise<FieldwireTaskStatusChangeResult> {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const statuses = normalizeArray(await this.statuses(projectId) as any)
+                const taskDetailCache = new Map<string, any>()
+                const output: FieldwireTaskStatusChangeRow[] = []
+                const statusScan: FieldwireTaskStatusChangeStatusScan[] = []
+
+                for (const status of statuses) {
+                    const statusId = String(status?.id || '').trim()
+                    if (!statusId) {
+                        continue
+                    }
+
+                    const statusTasks = normalizeArray(await this.taskFilterByStatus(projectId, statusId, startDate, endDate) as any)
+                    statusScan.push({
+                        statusId,
+                        statusName: stringify(status?.name),
+                        statusKind: stringify(status?.kind),
+                        count: statusTasks.length
+                    })
+                    for (const statusTask of statusTasks) {
+                        const taskId = String(statusTask?.id || statusTask?.task_id || '').trim()
+                        if (!taskId) {
+                            continue
+                        }
+
+                        let taskDetail = taskDetailCache.get(taskId)
+                        if (!taskDetail) {
+                            taskDetail = await this.taskDetail(projectId, taskId)
+                            taskDetailCache.set(taskId, taskDetail)
+                        }
+
+                        output.push(flattenTaskStatusChange(projectId, status, statusTask, taskDetail))
+                    }
+                }
+
+                output.sort((left, right) => {
+                    const leftDate = Date.parse(left.statusChangedAt || left.taskUpdatedAt || '')
+                    const rightDate = Date.parse(right.statusChangedAt || right.taskUpdatedAt || '')
+                    const safeLeft = Number.isNaN(leftDate) ? 0 : leftDate
+                    const safeRight = Number.isNaN(rightDate) ? 0 : rightDate
+                    return safeRight - safeLeft
+                })
+
+                return resolve({
+                    rows: output,
+                    statusScan
+                })
+            } catch (err) {
+                return reject(err)
+            }
+        })
     }
     public async projectTaskRelations(projectId: string): Promise<TaskTypeAttributeSchema[]> {
         return new Promise(async (resolve, reject) => {
@@ -1468,6 +1526,118 @@ export class FieldwireSDK {
 function truncateFieldwireLog(value: string): string {
     const normalized = String(value || '').replace(/\s+/g, ' ').trim()
     return normalized.length > 600 ? `${normalized.slice(0, 600)}...` : normalized
+}
+
+function normalizeArray(value: any): any[] {
+    if (Array.isArray(value)) {
+        return value
+    }
+    if (Array.isArray(value?.rows)) {
+        return value.rows
+    }
+    if (Array.isArray(value?.data)) {
+        return value.data
+    }
+    if (value && typeof value === 'object') {
+        return [value]
+    }
+    return []
+}
+
+function flattenTaskStatusChange(projectId: string, status: any, statusTask: any, taskDetail: any): FieldwireTaskStatusChangeRow {
+    const task = normalizeTaskDetail(taskDetail) || statusTask || {}
+    return {
+        fieldwireProjectId: projectId,
+        taskId: stringify(task.id || statusTask?.id || statusTask?.task_id),
+        taskName: stringify(task.name || statusTask?.name),
+        sequenceNumber: toNullableNumber(task.sequence_number || statusTask?.sequence_number),
+        priority: toNullableNumber(task.priority || statusTask?.priority),
+        statusId: stringify(status.id || statusTask?.status_id || task.status_id),
+        statusName: stringify(status.name),
+        statusColor: stringify(status.color),
+        statusKind: stringify(status.kind),
+        statusChangedAt: stringify(statusTask?.status_changed_at || statusTask?.status_updated_at || statusTask?.changed_at || statusTask?.updated_at || task.updated_at),
+        taskCreatedAt: stringify(task.created_at),
+        taskUpdatedAt: stringify(task.updated_at || statusTask?.updated_at),
+        dueAt: stringify(task.due_at || statusTask?.due_at || task.due_date || statusTask?.due_date),
+        startAt: stringify(task.start_at || statusTask?.start_at),
+        endAt: stringify(task.end_at || statusTask?.end_at),
+        fixedAt: stringify(task.fixed_at || statusTask?.fixed_at),
+        verifiedAt: stringify(task.verified_at || statusTask?.verified_at),
+        ownerUserId: toNullableNumber(task.owner_user_id || statusTask?.owner_user_id),
+        floorplanId: stringify(task.floorplan_id || statusTask?.floorplan_id),
+        locationId: stringify(task.location_id || statusTask?.location_id),
+        teamId: stringify(task.team_id || statusTask?.team_id),
+        taskTypeId: stringify(task.task_type_id || statusTask?.task_type_id),
+        isLocal: Boolean(typeof task.is_local !== 'undefined' ? task.is_local : statusTask?.is_local),
+        rawStatusChange: statusTask,
+        rawTask: task
+    }
+}
+
+function normalizeTaskDetail(taskDetail: any): any {
+    if (Array.isArray(taskDetail)) {
+        return taskDetail[0] || null
+    }
+    if (taskDetail?.data) {
+        return taskDetail.data
+    }
+    return taskDetail
+}
+
+function stringify(value: any): string {
+    if (value === null || typeof value === 'undefined') {
+        return ''
+    }
+    return String(value)
+}
+
+function toNullableNumber(value: any): number | null {
+    if (value === null || typeof value === 'undefined' || value === '') {
+        return null
+    }
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+}
+
+export interface FieldwireTaskStatusChangeRow {
+    fieldwireProjectId: string
+    taskId: string
+    taskName: string
+    sequenceNumber: number | null
+    priority: number | null
+    statusId: string
+    statusName: string
+    statusColor: string
+    statusKind: string
+    statusChangedAt: string
+    taskCreatedAt: string
+    taskUpdatedAt: string
+    dueAt: string
+    startAt: string
+    endAt: string
+    fixedAt: string
+    verifiedAt: string
+    ownerUserId: number | null
+    floorplanId: string
+    locationId: string
+    teamId: string
+    taskTypeId: string
+    isLocal: boolean
+    rawStatusChange: any
+    rawTask: any
+}
+
+export interface FieldwireTaskStatusChangeStatusScan {
+    statusId: string
+    statusName: string
+    statusKind: string
+    count: number
+}
+
+export interface FieldwireTaskStatusChangeResult {
+    rows: FieldwireTaskStatusChangeRow[]
+    statusScan: FieldwireTaskStatusChangeStatusScan[]
 }
 
 export interface PreviewResponse {

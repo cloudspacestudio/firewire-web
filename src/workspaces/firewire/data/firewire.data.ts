@@ -402,21 +402,48 @@ export class FirewireData {
                     const storage = new AzureBlobDocumentStorage()
                     const deletedBlobs: string[] = []
                     const missingBlobs: string[] = []
-                    for (const version of Array.isArray(file.versions) ? file.versions : []) {
-                        if (!version?.blobName) {
-                            continue
-                        }
-                        const deleted = await storage.deleteIfExists(version.blobContainerName || workspaceKey, version.blobName)
-                        if (deleted) {
-                            deletedBlobs.push(version.blobName)
-                        } else {
-                            missingBlobs.push(version.blobName)
+                    const derivedFloorplans = files.filter((item: any) =>
+                        item?.id !== fileId
+                        && item?.folderId === 'floorplans'
+                        && String(item?.sourceDocumentId || '') === fileId)
+                    const filesToDelete = [file, ...derivedFloorplans]
+                    for (const deletedFile of filesToDelete) {
+                        for (const version of Array.isArray(deletedFile?.versions) ? deletedFile.versions : []) {
+                            if (!version?.blobName) {
+                                continue
+                            }
+                            const deleted = await storage.deleteIfExists(version.blobContainerName || workspaceKey, version.blobName)
+                            if (deleted) {
+                                deletedBlobs.push(version.blobName)
+                            } else {
+                                missingBlobs.push(version.blobName)
+                            }
                         }
                     }
 
+                    const deletedFileIds = new Set(filesToDelete.map((item: any) => String(item?.id || '')))
+                    const remainingFiles = files.filter((item: any) => !deletedFileIds.has(String(item?.id || '')))
+                        .map((item: any) => {
+                            const annotations = Array.isArray(item?.floorplanDesign?.annotations)
+                                ? item.floorplanDesign.annotations
+                                : null
+                            if (!annotations) return item
+                            const nextAnnotations = annotations.filter((annotation: any) => String(annotation?.sourceDocumentId || '') !== fileId)
+                            return nextAnnotations.length === annotations.length
+                                ? item
+                                : {
+                                    ...item,
+                                    updatedAt: new Date().toISOString(),
+                                    floorplanDesign: {
+                                        ...(item.floorplanDesign || {}),
+                                        annotations: nextAnnotations,
+                                        updatedAt: new Date().toISOString()
+                                    }
+                                }
+                        })
                     const nextPayload = {
                         ...(workspace.payload || {}),
-                        files: files.filter((item: any) => item?.id !== fileId)
+                        files: remainingFiles
                     }
                     await sqldb.saveWorkspaceStorage('project-doc-library', workspaceKey, JSON.stringify(nextPayload), 'system')
                     const result = await FirewireData.loadStoredWorkspace(sqldb, 'project-doc-library', workspaceKey, { files: [] })
@@ -424,7 +451,8 @@ export class FirewireData {
                         data: {
                             payload: result.payload,
                             deletedBlobs,
-                            missingBlobs
+                            missingBlobs,
+                            deletedDerivedFloorplanIds: derivedFloorplans.map((item: any) => item.id)
                         }
                     })
                 } catch (err: Error|any) {

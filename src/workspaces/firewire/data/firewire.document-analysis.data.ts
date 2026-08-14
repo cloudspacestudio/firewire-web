@@ -1,5 +1,6 @@
 import * as express from 'express'
 import { randomUUID } from 'node:crypto'
+import { PDFDocument } from 'pdf-lib'
 
 import { SqlDb } from '../../fieldwire/repository/sqldb'
 import {
@@ -10,6 +11,9 @@ import {
     DocumentAnalysisBomActionApplication,
     DocumentAnalysisBomProposal,
     DocumentAnalysisDeviceCreationApplication,
+    DocumentAnalysisFloorplanApplication,
+    DocumentAnalysisFloorplanPlacementApplication,
+    DocumentAnalysisFloorplanProposal,
     DocumentAnalysisRecord,
     DocumentAnalysisProgress,
     DocumentAnalysisProjectDetailProposal,
@@ -31,25 +35,100 @@ const DOCUMENT_LIBRARY_AREA = 'project-doc-library'
 
 type DocumentLibraryVersion = {
     id?: string
+    versionNumber?: number
+    uploadedAt?: string
+    uploadedBy?: string
     sourceFileName?: string
     mimeType?: string
     sizeBytes?: number
     blobName?: string
     blobContainerName?: string
     dataUrl?: string
+    lastModified?: number
 }
 
 type DocumentLibraryFile = {
     id?: string
+    folderId?: string
+    documentKind?: string
+    storageKey?: string
+    extension?: string
     name?: string
     sourceFileName?: string
+    createdAt?: string
+    updatedAt?: string
+    floorplanDesign?: any
+    sourceAnalysisId?: string
+    sourceDocumentId?: string
+    sourceDocumentVersionId?: string
     versions?: DocumentLibraryVersion[]
 }
 
 export class FirewireDocumentAnalysisData {
     private static readonly runningInspections = new Set<string>()
     private static readonly runningInspectionControllers = new Map<string, AbortController>()
+    private static readonly activeOpenAiFileIds = new Map<string, string>()
     private static readonly userCancelledInspections = new Set<string>()
+    private static readonly deletingProjectIds = new Set<string>()
+    private static readonly deletedProjectIds = new Set<string>()
+
+    static async prepareProjectDeletion(app: express.Application, projectId: string): Promise<{
+        deletedOpenAiFileCount: number
+        missingOpenAiFileCount: number
+    }> {
+        const normalizedProjectId = String(projectId || '').trim()
+        FirewireDocumentAnalysisData.deletingProjectIds.add(normalizedProjectId)
+
+        for (const [inspectionKey, controller] of FirewireDocumentAnalysisData.runningInspectionControllers) {
+            if (FirewireDocumentAnalysisData.inspectionKeyBelongsToProject(inspectionKey, normalizedProjectId)) {
+                FirewireDocumentAnalysisData.userCancelledInspections.add(inspectionKey)
+                controller.abort()
+            }
+        }
+
+        const waitStartedAt = Date.now()
+        while ([...FirewireDocumentAnalysisData.runningInspections]
+            .some((inspectionKey) => FirewireDocumentAnalysisData.inspectionKeyBelongsToProject(inspectionKey, normalizedProjectId))) {
+            if (Date.now() - waitStartedAt > 30000) {
+                throw new DocumentAnalysisInputError(
+                    'An active document inspection did not stop in time. Retry project deletion after the inspection finishes.',
+                    409
+                )
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+
+        const sqldb = new SqlDb(app)
+        const workspace = await FirewireDocumentAnalysisData.loadAnalysisWorkspace(sqldb, normalizedProjectId)
+        const persistedOpenAiFileIds = workspace.analyses
+            .filter((record) => record.openAiFileId && !record.openAiFileDeletedAt)
+            .map((record) => record.openAiFileId)
+        const activeOpenAiFileIds = [...FirewireDocumentAnalysisData.activeOpenAiFileIds]
+            .filter(([inspectionKey]) => FirewireDocumentAnalysisData.inspectionKeyBelongsToProject(inspectionKey, normalizedProjectId))
+            .map(([, fileId]) => fileId)
+        const retainedOpenAiFileIds = [...new Set([...persistedOpenAiFileIds, ...activeOpenAiFileIds])]
+        const cleanup = await new OpenAiDocumentAnalysisService().deleteTemporaryFiles(retainedOpenAiFileIds)
+        for (const [inspectionKey, fileId] of FirewireDocumentAnalysisData.activeOpenAiFileIds) {
+            if (FirewireDocumentAnalysisData.inspectionKeyBelongsToProject(inspectionKey, normalizedProjectId)
+                && retainedOpenAiFileIds.includes(fileId)) {
+                FirewireDocumentAnalysisData.activeOpenAiFileIds.delete(inspectionKey)
+            }
+        }
+        return {
+            deletedOpenAiFileCount: cleanup.deletedFileIds.length,
+            missingOpenAiFileCount: cleanup.missingFileIds.length
+        }
+    }
+
+    static completeProjectDeletion(projectId: string): void {
+        const normalizedProjectId = String(projectId || '').trim()
+        FirewireDocumentAnalysisData.deletingProjectIds.delete(normalizedProjectId)
+        FirewireDocumentAnalysisData.deletedProjectIds.add(normalizedProjectId)
+    }
+
+    static cancelProjectDeletion(projectId: string): void {
+        FirewireDocumentAnalysisData.deletingProjectIds.delete(String(projectId || '').trim())
+    }
 
     static manifestItems = [
         {
@@ -125,7 +204,23 @@ export class FirewireDocumentAnalysisData {
                         })
                     }
 
-                    return res.status(200).json({ data: FirewireDocumentAnalysisData.toClientRecord(record) })
+                    const currentRecord = record.status === 'completed' && record.result
+                        ? {
+                            ...record,
+                            result: {
+                                ...record.result,
+                                proposedBomActions: FirewireDocumentAnalysisData.annotateProjectBomMatches(
+                                    record.result.proposedBomActions || [],
+                                    context.project.worksheetData
+                                ),
+                                proposedFloorplanActions: FirewireDocumentAnalysisData.annotateFloorplanMatches(
+                                    record.result.proposedFloorplanActions || [],
+                                    await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
+                                )
+                            }
+                        }
+                        : record
+                    return res.status(200).json({ data: FirewireDocumentAnalysisData.toClientRecord(currentRecord) })
                 } catch (err: Error | any) {
                     const statusCode = err instanceof DocumentAnalysisInputError ? err.statusCode : 500
                     return res.status(statusCode).json({ message: err?.message || String(err || '') })
@@ -408,7 +503,21 @@ export class FirewireDocumentAnalysisData {
                     if (selected.some((proposal) => !proposal)) {
                         return res.status(400).json({ message: 'One or more selected BOM actions are not part of the stored inspection result.' })
                     }
-                    const ineligible = (selected as DocumentAnalysisBomProposal[]).filter((proposal) =>
+                    const evaluatedSelected = FirewireDocumentAnalysisData.annotateProjectBomMatches(
+                        selected as DocumentAnalysisBomProposal[],
+                        context.project.worksheetData
+                    )
+                    const projectBomBlocked = evaluatedSelected.filter((proposal) =>
+                        proposal.projectBomMatch?.status === 'ALREADY_ON_BOM'
+                        || proposal.projectBomMatch?.status === 'DUPLICATE_PROPOSAL')
+                    if (projectBomBlocked.length > 0) {
+                        return res.status(409).json({
+                            message: 'One or more selected devices or parts already exist on the project BOM or duplicate another selected proposal. Refresh the findings before applying.',
+                            code: 'DOCUMENT_BOM_ENTITY_ALREADY_EXISTS',
+                            proposalIds: projectBomBlocked.map((proposal) => proposal.proposalId)
+                        })
+                    }
+                    const ineligible = evaluatedSelected.filter((proposal) =>
                         proposal.quantityStatus === 'CONFLICT'
                         || proposal.reconciledQuantity <= 0
                         || proposal.catalogMatch.status !== 'MATCHED'
@@ -449,7 +558,7 @@ export class FirewireDocumentAnalysisData {
                     section.rows = Array.isArray(section.rows) ? section.rows : []
 
                     const appliedRows = [] as DocumentAnalysisBomActionApplication['rows']
-                    for (const proposal of selected as DocumentAnalysisBomProposal[]) {
+                    for (const proposal of evaluatedSelected) {
                         const row = await FirewireDocumentAnalysisData.createBomRowFromProposal(
                             context.sqldb,
                             context.project,
@@ -605,6 +714,16 @@ export class FirewireDocumentAnalysisData {
                             code: 'DOCUMENT_DEVICE_PART_REQUIRED'
                         })
                     }
+                    const [projectCheckedProposal] = FirewireDocumentAnalysisData.annotateProjectBomMatches(
+                        [proposal],
+                        context.project.worksheetData
+                    )
+                    if (projectCheckedProposal.projectBomMatch?.status === 'ALREADY_ON_BOM') {
+                        return res.status(409).json({
+                            message: 'This master part already exists on the project BOM and does not need a new BOM entry.',
+                            code: 'DOCUMENT_BOM_ENTITY_ALREADY_EXISTS'
+                        })
+                    }
 
                     const partId = String(proposal.catalogMatch.partId).trim()
                     const parts = await context.sqldb.getParts()
@@ -658,7 +777,7 @@ export class FirewireDocumentAnalysisData {
                         throw new Error('The device was created but could not be reloaded.')
                     }
 
-                    const updatedProposal: DocumentAnalysisBomProposal = {
+                    const deviceMatchedProposal: DocumentAnalysisBomProposal = {
                         ...proposal,
                         catalogMatch: {
                             status: 'MATCHED',
@@ -674,6 +793,10 @@ export class FirewireDocumentAnalysisData {
                                 : `User confirmed the existing Firewire device for master part ${String(part.partNumber || part.PartNumber || '').trim()}.`
                         }
                     }
+                    const [updatedProposal] = FirewireDocumentAnalysisData.annotateProjectBomMatches(
+                        [deviceMatchedProposal],
+                        context.project.worksheetData
+                    )
                     const proposedBomActions = (record.result.proposedBomActions || []).map((item) =>
                         item.proposalId === proposalId ? updatedProposal : item)
                     const userId = FirewireDocumentAnalysisData.resolveUserId(req)
@@ -721,6 +844,405 @@ export class FirewireDocumentAnalysisData {
         },
         {
             method: 'post',
+            path: '/api/firewire/projects/:projectId/document-analysis/files/:fileId/versions/:versionId/actions/floorplans/proposals/:proposalId/create',
+            fx: async (req: express.Request, res: express.Response) => {
+                let uploadedBlob: { containerName: string, blobName: string } | null = null
+                try {
+                    const context = await FirewireDocumentAnalysisData.resolveRequestContext(req)
+                    if (!context) return res.status(404).json({ message: 'Project or document version was not found.' })
+                    const analysisId = String(req.body?.analysisId || '').trim()
+                    const proposalId = String(req.params.proposalId || '').trim()
+                    const record = await FirewireDocumentAnalysisData.findCompletedAnalysisRecord(context, analysisId)
+                    if (!record) return res.status(404).json({ message: 'The completed inspection result was not found.' })
+                    const proposal = (record.result?.proposedFloorplanActions || []).find((item) => item.proposalId === proposalId)
+                    if (!proposal) return res.status(404).json({ message: 'The stored floorplan proposal was not found.' })
+
+                    const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
+                    const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
+                    const priorApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
+                    const priorFile = priorApplication
+                        ? files.find((file) => String(file.id || '') === priorApplication.floorplanFileId)
+                        : undefined
+                    if (priorApplication && priorFile) {
+                        return res.status(200).json({ data: { record: FirewireDocumentAnalysisData.toClientRecord(record), application: priorApplication, file: priorFile, workspace: payload, alreadyApplied: true } })
+                    }
+
+                    const [evaluated] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
+                    if (evaluated.floorplanMatch?.status === 'ALREADY_EXISTS') {
+                        return res.status(409).json({
+                            message: `${proposal.name} already exists in this project's floorplans.`,
+                            code: 'DOCUMENT_FLOORPLAN_ALREADY_EXISTS',
+                            floorplanFileId: evaluated.floorplanMatch.floorplanFileId
+                        })
+                    }
+                    if (!/\.pdf$/i.test(context.sourceFilename) && String(context.version.mimeType || '').toLowerCase() !== 'application/pdf') {
+                        return res.status(409).json({ message: 'Creating an individual floorplan currently requires a PDF source document.', code: 'DOCUMENT_FLOORPLAN_PDF_REQUIRED' })
+                    }
+
+                    const source = await FirewireDocumentAnalysisData.loadVersionContent(context.workspaceKey, context.version)
+                    const sourcePdf = await PDFDocument.load(source.buffer)
+                    const pageIndex = Math.floor(Number(proposal.pageNumber || 0)) - 1
+                    if (pageIndex < 0 || pageIndex >= sourcePdf.getPageCount()) {
+                        return res.status(409).json({ message: 'The proposed PDF page no longer exists in this document version. Re-inspect before creating the floorplan.' })
+                    }
+                    const floorplanPdf = await PDFDocument.create()
+                    const [page] = await floorplanPdf.copyPages(sourcePdf, [pageIndex])
+                    floorplanPdf.addPage(page)
+                    const buffer = Buffer.from(await floorplanPdf.save())
+                    const storage = new AzureBlobDocumentStorage()
+                    if (!storage.isConfigured()) throw new DocumentAnalysisConfigurationError('Azure Blob Storage is not configured for floorplan creation.')
+
+                    const now = new Date().toISOString()
+                    const userId = FirewireDocumentAnalysisData.resolveUserId(req)
+                    const fileId = `floorplan-${randomUUID()}`
+                    const versionId = `version-${randomUUID()}`
+                    const sourceFileName = `${FirewireDocumentAnalysisData.sanitizeFloorplanFileName(proposal.name)}.pdf`
+                    const blobName = ['project-doc-library', FirewireDocumentAnalysisData.sanitizePathSegment(context.workspaceKey), FirewireDocumentAnalysisData.sanitizePathSegment(fileId), `0001-${FirewireDocumentAnalysisData.sanitizePathSegment(versionId)}-${FirewireDocumentAnalysisData.sanitizePathSegment(sourceFileName)}`].join('/')
+                    await storage.upload({
+                        buffer,
+                        containerName: context.workspaceKey,
+                        blobName,
+                        contentType: 'application/pdf',
+                        metadata: { workspaceKey: context.workspaceKey, fileId, versionId, folderId: 'floorplans', sourceAnalysisId: record.id, sourceProposalId: proposalId }
+                    })
+                    uploadedBlob = { containerName: context.workspaceKey, blobName }
+                    const file: DocumentLibraryFile = {
+                        id: fileId,
+                        folderId: 'floorplans',
+                        documentKind: 'drawing',
+                        storageKey: context.workspaceKey,
+                        sourceFileName,
+                        name: proposal.name,
+                        extension: 'pdf',
+                        createdAt: now,
+                        updatedAt: now,
+                        sourceAnalysisId: record.id,
+                        sourceDocumentId: record.documentId,
+                        sourceDocumentVersionId: record.versionId,
+                        floorplanDesign: { annotations: [], rotationDegrees: 0, symbolDisplayMode: 'bubble', updatedAt: now },
+                        versions: [{
+                            id: versionId,
+                            versionNumber: 1,
+                            uploadedAt: now,
+                            uploadedBy: userId,
+                            sourceFileName,
+                            mimeType: 'application/pdf',
+                            sizeBytes: buffer.length,
+                            lastModified: Date.now(),
+                            blobName,
+                            blobContainerName: storage.getProjectContainerName(context.workspaceKey)
+                        }]
+                    }
+                    const nextPayload = { ...payload, files: [...files, file] }
+                    await context.sqldb.saveWorkspaceStorage(DOCUMENT_LIBRARY_AREA, context.workspaceKey, JSON.stringify(nextPayload), userId)
+                    uploadedBlob = null
+
+                    const application: DocumentAnalysisFloorplanApplication = {
+                        id: `floorplan-application-${randomUUID()}`,
+                        appliedAt: now,
+                        appliedBy: userId,
+                        proposalId,
+                        floorplanFileId: fileId,
+                        floorplanName: proposal.name,
+                        pageNumber: proposal.pageNumber
+                    }
+                    const updatedProposal: DocumentAnalysisFloorplanProposal = {
+                        ...proposal,
+                        floorplanMatch: { status: 'CREATED', floorplanFileId: fileId, rationale: 'Created from the approved source PDF page.' }
+                    }
+                    const updatedRecord: DocumentAnalysisRecord = {
+                        ...record,
+                        result: { ...record.result!, proposedFloorplanActions: record.result!.proposedFloorplanActions.map((item) => item.proposalId === proposalId ? updatedProposal : item) },
+                        floorplanApplications: [application, ...(record.floorplanApplications || [])].slice(0, 100)
+                    }
+                    let applicationRecorded = true
+                    try {
+                        await FirewireDocumentAnalysisData.saveAnalysisRecord(context.sqldb, updatedRecord, userId)
+                    } catch (storageError) {
+                        applicationRecorded = false
+                        console.error('[document-inspection] Floorplan created but analysis application history could not be persisted.', {
+                            analysisId: record.id,
+                            proposalId,
+                            floorplanFileId: fileId,
+                            message: storageError instanceof Error ? storageError.message : String(storageError || '')
+                        })
+                    }
+                    return res.status(201).json({ data: { record: FirewireDocumentAnalysisData.toClientRecord(updatedRecord), application, applicationRecorded, file, workspace: nextPayload, alreadyApplied: false } })
+                } catch (err: Error | any) {
+                    if (uploadedBlob) {
+                        try { await new AzureBlobDocumentStorage().deleteIfExists(uploadedBlob.containerName, uploadedBlob.blobName) } catch { /* best-effort rollback */ }
+                    }
+                    const statusCode = err instanceof DocumentAnalysisInputError ? err.statusCode : err instanceof DocumentAnalysisConfigurationError ? 503 : 500
+                    return res.status(statusCode).json({ message: FirewireDocumentAnalysisData.getSafeErrorMessage(err) })
+                }
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/projects/:projectId/document-analysis/files/:fileId/versions/:versionId/actions/floorplans/proposals/:proposalId/locate-symbols',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const context = await FirewireDocumentAnalysisData.resolveRequestContext(req)
+                    if (!context) return res.status(404).json({ message: 'Project or document version was not found.' })
+                    const analysisId = String(req.body?.analysisId || '').trim()
+                    const proposalId = String(req.params.proposalId || '').trim()
+                    const record = await FirewireDocumentAnalysisData.findCompletedAnalysisRecord(context, analysisId)
+                    if (!record) return res.status(404).json({ message: 'The completed inspection result was not found.' })
+                    const proposal = (record.result?.proposedFloorplanActions || []).find((item) => item.proposalId === proposalId)
+                    if (!proposal) return res.status(404).json({ message: 'The stored floorplan proposal was not found.' })
+                    const replaceExisting = req.body?.replaceExisting === true
+                    const priorApplications = (record.floorplanPlacementApplications || [])
+                        .filter((application) => application.proposalId === proposalId)
+                    if (priorApplications.length > 0 && !replaceExisting) {
+                        return res.status(409).json({
+                            message: 'This floorplan already has applied AI placements. Choose the replace option to remove and re-scan only this inspection\'s generated symbols.'
+                        })
+                    }
+
+                    const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
+                    const floorplanApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
+                    const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
+                    const floorplanFileId = floorplanApplication?.floorplanFileId || evaluatedProposal.floorplanMatch?.floorplanFileId || ''
+                    const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
+                    const floorplan = files.find((file) => String(file.id || '') === floorplanFileId && String(file.folderId || '') === 'floorplans')
+                    const version = floorplan?.versions?.[floorplan.versions.length - 1]
+                    if (!floorplan || !version) return res.status(409).json({ message: 'Create or match the floorplan before locating symbols.' })
+
+                    const latestProject = await new FirewireProjectRepository(req.app).getFirewireProject(context.project.uuid)
+                    if (!latestProject) return res.status(404).json({ message: 'Project not found.' })
+                    const candidates = (record.result?.proposedBomActions || []).flatMap((candidate) => {
+                        if (candidate.catalogMatch.entityType !== 'DEVICE' || !candidate.catalogMatch.deviceId) return []
+                        const [evaluated] = FirewireDocumentAnalysisData.annotateProjectBomMatches([candidate], latestProject.worksheetData)
+                        const row = FirewireDocumentAnalysisData.findBomRow(latestProject.worksheetData, evaluated.projectBomMatch?.bomRowId || '')
+                        return row?.includeOnFloorplan ? [{ candidate, row }] : []
+                    })
+                    if (candidates.length === 0) {
+                        return res.status(409).json({
+                            message: 'No exact, floorplan-ready device rows from this inspection are currently on the project BOM. Apply or resolve the BOM proposals first.',
+                            code: 'DOCUMENT_FLOORPLAN_BOM_REQUIRED'
+                        })
+                    }
+
+                    const content = await FirewireDocumentAnalysisData.loadVersionContent(floorplan.storageKey || context.workspaceKey, version)
+                    const placements = await new OpenAiDocumentAnalysisService().locateFloorplanSymbols({
+                        buffer: content.buffer,
+                        filename: String(version.sourceFileName || floorplan.sourceFileName || `${proposal.name}.pdf`),
+                        mimeType: content.mimeType,
+                        projectId: context.project.uuid,
+                        documentId: record.documentId,
+                        versionId: record.versionId,
+                        floorplanName: proposal.name,
+                        sourcePageNumber: proposal.pageNumber,
+                        bomCandidates: candidates.map(({ candidate, row }) => ({
+                            proposalId: candidate.proposalId,
+                            deviceType: String(row.type || candidate.deviceType || ''),
+                            symbolLabel: String(row.floorplanLabelText || candidate.symbolLabel || ''),
+                            manufacturer: candidate.manufacturer,
+                            modelNumber: candidate.modelNumber,
+                            partNumber: String(row.partNbr || candidate.partNumber || ''),
+                            description: [candidate.description, row.description, row.type]
+                                .map((value) => String(value || '').trim())
+                                .filter((value, index, values) => !!value && values.indexOf(value) === index)
+                                .join(' | '),
+                            expectedProjectQuantity: Math.max(0, Math.floor(Number(row.floorplanQuantityTarget ?? row.qty ?? 0)))
+                        }))
+                    })
+                    const normalizedPlacements = placements.map((placement, index) => ({
+                        ...placement,
+                        placementId: `${proposalId}-focused-placement-${index + 1}`,
+                        source: {
+                            ...placement.source,
+                            filename: record.sourceFilename,
+                            page: String(proposal.pageNumber)
+                        }
+                    }))
+                    let removedAnnotationCount = 0
+                    let workspaceChanged = false
+                    const replacedExisting = replaceExisting && priorApplications.length > 0 && normalizedPlacements.length > 0
+                    if (replacedExisting) {
+                        const priorPlacementIds = new Set(priorApplications.flatMap((application) => application.placementIds))
+                        const priorAnnotationIds = new Set(priorApplications.flatMap((application) => application.annotationIds))
+                        const now = new Date().toISOString()
+                        for (const file of files) {
+                            const annotations = Array.isArray(file.floorplanDesign?.annotations)
+                                ? file.floorplanDesign.annotations
+                                : []
+                            const retainedAnnotations = annotations.filter((annotation: any) => {
+                                const belongsToInspection = String(annotation?.sourceAnalysisId || '') === record.id
+                                const matchesPriorPlacement = priorPlacementIds.has(String(annotation?.sourcePlacementId || ''))
+                                const matchesPriorAnnotation = priorAnnotationIds.has(String(annotation?.id || ''))
+                                const shouldRemove = belongsToInspection && (matchesPriorPlacement || matchesPriorAnnotation)
+                                if (shouldRemove) removedAnnotationCount += 1
+                                return !shouldRemove
+                            })
+                            if (retainedAnnotations.length !== annotations.length) {
+                                file.floorplanDesign = { ...(file.floorplanDesign || {}), annotations: retainedAnnotations, updatedAt: now }
+                                file.updatedAt = now
+                                workspaceChanged = true
+                            }
+                        }
+                    }
+                    const retainedPlacements = replaceExisting && priorApplications.length > 0 && normalizedPlacements.length === 0
+                        ? proposal.symbolPlacements
+                        : normalizedPlacements
+                    const updatedProposal = { ...proposal, symbolPlacements: retainedPlacements }
+                    const updatedRecord: DocumentAnalysisRecord = {
+                        ...record,
+                        result: {
+                            ...record.result!,
+                            proposedFloorplanActions: record.result!.proposedFloorplanActions.map((item) =>
+                                item.proposalId === proposalId ? updatedProposal : item)
+                        },
+                        floorplanPlacementApplications: replacedExisting
+                            ? (record.floorplanPlacementApplications || []).filter((application) => application.proposalId !== proposalId)
+                            : record.floorplanPlacementApplications
+                    }
+                    const userId = FirewireDocumentAnalysisData.resolveUserId(req)
+                    const nextPayload = { ...payload, files }
+                    if (workspaceChanged) {
+                        await context.sqldb.saveWorkspaceStorage(DOCUMENT_LIBRARY_AREA, context.workspaceKey, JSON.stringify(nextPayload), userId)
+                    }
+                    await FirewireDocumentAnalysisData.saveAnalysisRecord(context.sqldb, updatedRecord, userId)
+                    return res.status(200).json({
+                        data: {
+                            record: FirewireDocumentAnalysisData.toClientRecord(updatedRecord),
+                            proposal: updatedProposal,
+                            placements: normalizedPlacements,
+                            removedAnnotationCount,
+                            workspace: workspaceChanged ? nextPayload : undefined,
+                            file: workspaceChanged ? floorplan : undefined
+                        }
+                    })
+                } catch (err: Error | any) {
+                    const statusCode = err instanceof DocumentAnalysisProviderError
+                        ? err.statusCode
+                        : err instanceof DocumentAnalysisInputError
+                            ? err.statusCode
+                            : 500
+                    return res.status(statusCode).json({ message: FirewireDocumentAnalysisData.getSafeErrorMessage(err) })
+                }
+            }
+        },
+        {
+            method: 'post',
+            path: '/api/firewire/projects/:projectId/document-analysis/files/:fileId/versions/:versionId/actions/floorplans/proposals/:proposalId/place-symbols',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const context = await FirewireDocumentAnalysisData.resolveRequestContext(req)
+                    if (!context) return res.status(404).json({ message: 'Project or document version was not found.' })
+                    const analysisId = String(req.body?.analysisId || '').trim()
+                    const proposalId = String(req.params.proposalId || '').trim()
+                    const record = await FirewireDocumentAnalysisData.findCompletedAnalysisRecord(context, analysisId)
+                    if (!record) return res.status(404).json({ message: 'The completed inspection result was not found.' })
+                    const proposal = (record.result?.proposedFloorplanActions || []).find((item) => item.proposalId === proposalId)
+                    if (!proposal) return res.status(404).json({ message: 'The stored floorplan proposal was not found.' })
+                    const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
+                    const floorplanApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
+                    const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
+                    const floorplanFileId = floorplanApplication?.floorplanFileId || evaluatedProposal.floorplanMatch?.floorplanFileId || ''
+                    if (!floorplanFileId) return res.status(409).json({ message: 'Create or match the floorplan before placing symbols.' })
+
+                    const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
+                    const floorplan = files.find((file) => String(file.id || '') === floorplanFileId && String(file.folderId || '') === 'floorplans')
+                    if (!floorplan) return res.status(409).json({ message: 'The target floorplan is no longer available.' })
+                    const latestProject = await new FirewireProjectRepository(req.app).getFirewireProject(context.project.uuid)
+                    if (!latestProject) return res.status(404).json({ message: 'Project not found.' })
+
+                    const priorApplications = (record.floorplanPlacementApplications || [])
+                        .filter((application) => application.proposalId === proposalId)
+                    const priorPlacementIds = new Set(priorApplications.flatMap((application) => application.placementIds))
+                    const priorAnnotationIdByPlacement = new Map<string, string>()
+                    for (const application of priorApplications) {
+                        application.placementIds.forEach((placementId, index) => {
+                            const annotationId = application.annotationIds[index]
+                            if (placementId && annotationId) priorAnnotationIdByPlacement.set(placementId, annotationId)
+                        })
+                    }
+                    const allAnnotations = files.flatMap((file) => Array.isArray(file.floorplanDesign?.annotations) ? file.floorplanDesign.annotations : [])
+                    const targetAnnotations = Array.isArray(floorplan.floorplanDesign?.annotations) ? floorplan.floorplanDesign.annotations : []
+                    const annotationIds: string[] = []
+                    const placementIds: string[] = []
+                    const recoveredAnnotationIds: string[] = []
+                    const recoveredPlacementIds: string[] = []
+                    const skipped: Array<{ placementId: string, reason: string }> = []
+
+                    for (const placement of proposal.symbolPlacements || []) {
+                        const priorAnnotationId = priorAnnotationIdByPlacement.get(placement.placementId)
+                        const existingAnnotation = allAnnotations.find((item: any) =>
+                            (item?.sourceAnalysisId === record.id && item?.sourcePlacementId === placement.placementId)
+                            || (!!priorAnnotationId && item?.id === priorAnnotationId))
+                        if (existingAnnotation) {
+                            if (existingAnnotation && !priorPlacementIds.has(placement.placementId)) {
+                                recoveredPlacementIds.push(placement.placementId)
+                                recoveredAnnotationIds.push(String(existingAnnotation.id || ''))
+                            }
+                            skipped.push({ placementId: placement.placementId, reason: 'already placed' })
+                            continue
+                        }
+                        const bomProposal = (record.result?.proposedBomActions || []).find((item) => item.proposalId === placement.bomProposalId)
+                        if (!bomProposal || bomProposal.catalogMatch.entityType !== 'DEVICE') {
+                            skipped.push({ placementId: placement.placementId, reason: 'device match required' })
+                            continue
+                        }
+                        const [evaluated] = FirewireDocumentAnalysisData.annotateProjectBomMatches([bomProposal], latestProject.worksheetData)
+                        const bomRowId = evaluated.projectBomMatch?.bomRowId || ''
+                        const row = FirewireDocumentAnalysisData.findBomRow(latestProject.worksheetData, bomRowId)
+                        if (!row || !row.includeOnFloorplan) {
+                            skipped.push({ placementId: placement.placementId, reason: 'floorplan-ready BOM row required' })
+                            continue
+                        }
+                        const target = Math.max(0, Math.floor(Number(row.floorplanQuantityTarget ?? row.qty ?? 0)))
+                        const placedCount = allAnnotations.filter((item: any) => item?.kind === 'symbol' && String(item?.bomRowId || '') === bomRowId).length
+                            + annotationIds.filter((annotationId) => targetAnnotations.some((item: any) => item.id === annotationId && item.bomRowId === bomRowId)).length
+                        if (placedCount >= target) {
+                            skipped.push({ placementId: placement.placementId, reason: 'placement target reached' })
+                            continue
+                        }
+                        const annotation = FirewireDocumentAnalysisData.createFloorplanAnnotation(row, placement, record)
+                        targetAnnotations.push(annotation)
+                        annotationIds.push(annotation.id)
+                        placementIds.push(placement.placementId)
+                    }
+                    if (annotationIds.length === 0 && recoveredAnnotationIds.length === 0) {
+                        return res.status(409).json({ message: 'No symbols were eligible for placement. Apply matched device rows to the BOM first, or review placement targets.', skipped })
+                    }
+                    const now = new Date().toISOString()
+                    floorplan.floorplanDesign = { ...(floorplan.floorplanDesign || {}), annotations: targetAnnotations, updatedAt: now }
+                    floorplan.updatedAt = now
+                    const userId = FirewireDocumentAnalysisData.resolveUserId(req)
+                    const nextPayload = { ...payload, files }
+                    await context.sqldb.saveWorkspaceStorage(DOCUMENT_LIBRARY_AREA, context.workspaceKey, JSON.stringify(nextPayload), userId)
+                    const application: DocumentAnalysisFloorplanPlacementApplication = {
+                        id: `floorplan-placement-${randomUUID()}`,
+                        appliedAt: now,
+                        appliedBy: userId,
+                        proposalId,
+                        floorplanFileId,
+                        placementIds: [...recoveredPlacementIds, ...placementIds],
+                        annotationIds: [...recoveredAnnotationIds, ...annotationIds]
+                    }
+                    const updatedRecord = { ...record, floorplanPlacementApplications: [application, ...(record.floorplanPlacementApplications || [])].slice(0, 200) }
+                    let applicationRecorded = true
+                    try {
+                        await FirewireDocumentAnalysisData.saveAnalysisRecord(context.sqldb, updatedRecord, userId)
+                    } catch (storageError) {
+                        applicationRecorded = false
+                        console.error('[document-inspection] Floorplan symbols placed but analysis application history could not be persisted.', {
+                            analysisId: record.id,
+                            proposalId,
+                            floorplanFileId,
+                            message: storageError instanceof Error ? storageError.message : String(storageError || '')
+                        })
+                    }
+                    return res.status(200).json({ data: { record: FirewireDocumentAnalysisData.toClientRecord(updatedRecord), application, applicationRecorded, alreadyApplied: annotationIds.length === 0, file: floorplan, workspace: nextPayload, skipped } })
+                } catch (err: Error | any) {
+                    const statusCode = err instanceof DocumentAnalysisInputError ? err.statusCode : 500
+                    return res.status(statusCode).json({ message: FirewireDocumentAnalysisData.getSafeErrorMessage(err) })
+                }
+            }
+        },
+        {
+            method: 'post',
             path: '/api/firewire/projects/:projectId/document-analysis/files/:fileId/versions/:versionId',
             fx: async (req: express.Request, res: express.Response) => {
                 console.info('[document-inspection] Inspection POST received.', {
@@ -752,6 +1274,7 @@ export class FirewireDocumentAnalysisData {
                             retryable: true
                         })
                     }
+                    FirewireDocumentAnalysisData.assertProjectAnalysisWritable(context.project.uuid)
                     FirewireDocumentAnalysisData.runningInspections.add(inspectionKey)
                     const abortController = new AbortController()
                     FirewireDocumentAnalysisData.runningInspectionControllers.set(inspectionKey, abortController)
@@ -817,6 +1340,34 @@ export class FirewireDocumentAnalysisData {
                         versionId: context.version.id,
                         projectContext: FirewireDocumentAnalysisData.createProjectContext(context.project),
                         signal: abortController.signal,
+                        onOpenAiFileUploaded: async (fileId) => {
+                            FirewireDocumentAnalysisData.activeOpenAiFileIds.set(inspectionKey, fileId)
+                            if (!sqldb || !runningRecord) {
+                                return
+                            }
+                            runningRecord = { ...runningRecord, openAiFileId: fileId }
+                            await FirewireDocumentAnalysisData.saveAnalysisRecord(
+                                sqldb,
+                                runningRecord,
+                                runningRecord.requestedBy
+                            )
+                        },
+                        onOpenAiFileDeleted: async (fileId, deletedAt) => {
+                            FirewireDocumentAnalysisData.activeOpenAiFileIds.delete(inspectionKey)
+                            if (!sqldb || !runningRecord) {
+                                return
+                            }
+                            runningRecord = {
+                                ...runningRecord,
+                                openAiFileId: fileId,
+                                openAiFileDeletedAt: deletedAt
+                            }
+                            await FirewireDocumentAnalysisData.saveAnalysisRecord(
+                                sqldb,
+                                runningRecord,
+                                runningRecord.requestedBy
+                            )
+                        },
                         onProgress: async (progress) => {
                             if (!sqldb || !runningRecord) {
                                 return
@@ -837,9 +1388,19 @@ export class FirewireDocumentAnalysisData {
                         'Matching extracted device candidates against the Firewire catalog.',
                         97
                     )
-                    output.result.proposedBomActions = await FirewireDocumentAnalysisData.matchBomCatalogCandidates(
+                    const catalogMatchedProposals = await FirewireDocumentAnalysisData.matchBomCatalogCandidates(
                         sqldb,
                         output.result.proposedBomActions || []
+                    )
+                    const currentProject = await new FirewireProjectRepository(req.app)
+                        .getFirewireProject(context.project.uuid)
+                    output.result.proposedBomActions = FirewireDocumentAnalysisData.annotateProjectBomMatches(
+                        catalogMatchedProposals,
+                        currentProject?.worksheetData || context.project.worksheetData
+                    )
+                    output.result.proposedFloorplanActions = FirewireDocumentAnalysisData.annotateFloorplanMatches(
+                        output.result.proposedFloorplanActions || [],
+                        await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
                     )
 
                     const completedRecord: DocumentAnalysisRecord = {
@@ -933,6 +1494,7 @@ export class FirewireDocumentAnalysisData {
         if (!projectId || !workspaceKey || !fileId || !versionId) {
             throw new DocumentAnalysisInputError('projectId, workspaceKey, fileId, and versionId are required.', 400)
         }
+        FirewireDocumentAnalysisData.assertProjectAnalysisWritable(projectId)
 
         const repository = new FirewireProjectRepository(req.app)
         const project = await repository.getFirewireProject(projectId)
@@ -1015,6 +1577,7 @@ export class FirewireDocumentAnalysisData {
     }
 
     private static async saveAnalysisRecord(sqldb: SqlDb, record: DocumentAnalysisRecord, updatedBy: string): Promise<void> {
+        FirewireDocumentAnalysisData.assertProjectAnalysisWritable(record.projectId)
         const workspace = await FirewireDocumentAnalysisData.loadAnalysisWorkspace(sqldb, record.projectId)
         const analyses = workspace.analyses.filter((item) => !(
             item.workspaceKey === record.workspaceKey
@@ -1055,6 +1618,21 @@ export class FirewireDocumentAnalysisData {
 
     private static getInspectionKey(projectId: string, workspaceKey: string, documentId: string, versionId: string): string {
         return [projectId, workspaceKey, documentId, versionId].join(':')
+    }
+
+    private static inspectionKeyBelongsToProject(inspectionKey: string, projectId: string): boolean {
+        return inspectionKey.startsWith(`${projectId}:`)
+    }
+
+    private static assertProjectAnalysisWritable(projectId: string): void {
+        const normalizedProjectId = String(projectId || '').trim()
+        if (FirewireDocumentAnalysisData.deletingProjectIds.has(normalizedProjectId)
+            || FirewireDocumentAnalysisData.deletedProjectIds.has(normalizedProjectId)) {
+            throw new DocumentAnalysisInputError(
+                'Document analysis is unavailable because this project is being deleted or has been deleted.',
+                409
+            )
+        }
     }
 
     private static normalizeDeviceText(value: unknown, maxLength: number): string {
@@ -1111,6 +1689,116 @@ export class FirewireDocumentAnalysisData {
                 billingPhone: String(customerInfo.billingPhone || ''),
                 contractOrPoNumber: String(customerInfo.contractOrPoNumber || '')
             }
+        }
+    }
+
+    private static async loadDocumentLibraryPayload(sqldb: SqlDb, workspaceKey: string): Promise<any> {
+        const record = await sqldb.getWorkspaceStorage(DOCUMENT_LIBRARY_AREA, workspaceKey)
+        return FirewireDocumentAnalysisData.parsePayload(record?.payloadJson, { files: [] })
+    }
+
+    private static async findCompletedAnalysisRecord(context: any, analysisId: string): Promise<DocumentAnalysisRecord | null> {
+        if (!analysisId) throw new DocumentAnalysisInputError('analysisId is required.', 400)
+        const workspace = await FirewireDocumentAnalysisData.loadAnalysisWorkspace(context.sqldb, context.project.uuid)
+        return workspace.analyses.find((item) =>
+            item.id === analysisId
+            && item.workspaceKey === context.workspaceKey
+            && item.documentId === context.file.id
+            && item.versionId === context.version.id
+            && item.status === 'completed'
+            && !!item.result) || null
+    }
+
+    private static annotateFloorplanMatches(proposals: DocumentAnalysisFloorplanProposal[], payload: any): DocumentAnalysisFloorplanProposal[] {
+        const files: DocumentLibraryFile[] = Array.isArray(payload?.files) ? payload.files : []
+        const floorplans = files.filter((file) => String(file.folderId || '') === 'floorplans')
+        return proposals.map((proposal) => {
+            const key = FirewireDocumentAnalysisData.normalizeFloorplanName(proposal.name)
+            const existing = floorplans.find((file) => {
+                const names = [file.name, file.sourceFileName, ...(file.versions || []).map((version) => version.sourceFileName)]
+                return names.some((name) => FirewireDocumentAnalysisData.normalizeFloorplanName(name) === key)
+            })
+            return {
+                ...proposal,
+                floorplanMatch: existing
+                    ? {
+                        status: 'ALREADY_EXISTS',
+                        floorplanFileId: String(existing.id || ''),
+                        rationale: 'A project floorplan with the same normalized drawing name already exists.'
+                    }
+                    : {
+                        status: 'MISSING',
+                        floorplanFileId: '',
+                        rationale: 'No project floorplan with this normalized drawing name was found.'
+                    }
+            }
+        })
+    }
+
+    private static normalizeFloorplanName(value: unknown): string {
+        return String(value || '')
+            .replace(/\.[a-z0-9]{1,8}$/i, '')
+            .toLocaleLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim()
+    }
+
+    private static sanitizeFloorplanFileName(value: unknown): string {
+        return String(value || 'floorplan').replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 160) || 'floorplan'
+    }
+
+    private static sanitizePathSegment(value: unknown): string {
+        return String(value || 'item').trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-').slice(0, 180) || 'item'
+    }
+
+    private static findBomRow(worksheetData: any, bomRowId: string): any | null {
+        for (const section of Array.isArray(worksheetData?.bomSections) ? worksheetData.bomSections : []) {
+            const row = (Array.isArray(section?.rows) ? section.rows : []).find((candidate: any) => String(candidate?.id || candidate?.bomRowId || '') === bomRowId)
+            if (row) return row
+        }
+        return null
+    }
+
+    private static createFloorplanAnnotation(row: any, placement: any, record: DocumentAnalysisRecord): any {
+        const bomRowId = String(row.id || row.bomRowId || '')
+        const categoryName = String(row.type || row.description || row.partNbr || 'BOM Item').trim()
+        const deviceName = String(row.description || row.partNbr || categoryName).trim()
+        const label = String(row.floorplanLabelText || placement.symbolLabel || '').replace(/\s+/g, '').slice(0, 4)
+            || categoryName.split(/[^a-z0-9]+/i).filter(Boolean).map((word) => word[0]).join('').slice(0, 3).toUpperCase()
+            || 'SY'
+        const categoryKey = `category-${categoryName.toLocaleLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item'}`
+        return {
+            id: `ai-symbol-${randomUUID()}`,
+            kind: 'symbol',
+            xRatio: Math.max(0, Math.min(1, Number(placement.xRatio || 0))),
+            yRatio: Math.max(0, Math.min(1, Number(placement.yRatio || 0))),
+            bomRowId,
+            symbolId: `bom-row-${bomRowId}`,
+            categoryKey,
+            deviceId: String(row.deviceId || row.sourceDeviceId || '') || undefined,
+            categoryName,
+            partNumber: String(row.partNbr || ''),
+            deviceName,
+            shortName: String(row.shortName || ''),
+            floorplanLabelText: label,
+            partDescription: String(row.partDescription || row.description || ''),
+            iconId: row.iconId || null,
+            iconLabel: row.iconLabel || null,
+            iconDataUrl: row.iconDataUrl || null,
+            iconForegroundColor: row.iconForegroundColor || null,
+            materialCost: Number(row.cost || 0),
+            laborHours: Number(row.labor || 0),
+            customAttributes: FirewireDocumentAnalysisData.cloneJson(Array.isArray(row.customAttributes) ? row.customAttributes : []),
+            tags: FirewireDocumentAnalysisData.cloneJson(Array.isArray(row.tags) ? row.tags : []),
+            mediaFiles: FirewireDocumentAnalysisData.cloneJson(Array.isArray(row.mediaFiles) ? row.mediaFiles : []),
+            symbol: label,
+            label: deviceName,
+            color: '#77d7ff',
+            sourceAnalysisId: record.id,
+            sourceDocumentId: record.documentId,
+            sourceDocumentVersionId: record.versionId,
+            sourcePlacementId: String(placement.placementId || ''),
+            sourceConfidence: Math.max(0, Math.min(1, Number(placement.confidence || 0)))
         }
     }
 
@@ -1477,6 +2165,111 @@ export class FirewireDocumentAnalysisData {
             })
             return proposals
         }
+    }
+
+    private static annotateProjectBomMatches(
+        proposals: DocumentAnalysisBomProposal[],
+        worksheetData: any
+    ): DocumentAnalysisBomProposal[] {
+        const bomRows = (Array.isArray(worksheetData?.bomSections) ? worksheetData.bomSections : [])
+            .flatMap((section: any) => (Array.isArray(section?.rows) ? section.rows : []).map((row: any) => ({
+                row,
+                sectionTitle: String(section?.title || '').trim()
+            })))
+        const seenProposalEntities = new Set<string>()
+
+        return proposals.map((proposal) => {
+            const entityKey = FirewireDocumentAnalysisData.getBomProposalEntityKey(proposal)
+            if (!entityKey) {
+                return {
+                    ...proposal,
+                    projectBomMatch: {
+                        status: 'NOT_EVALUATED',
+                        bomRowId: '',
+                        bomSectionTitle: '',
+                        quantity: 0,
+                        rationale: 'An exact catalog device or part match is required before checking the project BOM.'
+                    }
+                }
+            }
+
+            const existing = bomRows.find(({ row }: { row: any }) =>
+                FirewireDocumentAnalysisData.bomRowMatchesProposalEntity(row, proposal))
+            if (existing) {
+                seenProposalEntities.add(entityKey)
+                return {
+                    ...proposal,
+                    projectBomMatch: {
+                        status: 'ALREADY_ON_BOM',
+                        bomRowId: String(existing.row?.id || existing.row?.bomRowId || '').trim(),
+                        bomSectionTitle: existing.sectionTitle,
+                        quantity: Number(existing.row?.qty ?? existing.row?.quantity ?? 0),
+                        rationale: 'The exact matched catalog entity is already represented by a project BOM row.'
+                    }
+                }
+            }
+
+            if (seenProposalEntities.has(entityKey)) {
+                return {
+                    ...proposal,
+                    projectBomMatch: {
+                        status: 'DUPLICATE_PROPOSAL',
+                        bomRowId: '',
+                        bomSectionTitle: '',
+                        quantity: 0,
+                        rationale: 'Another proposal in this inspection resolves to the same catalog entity.'
+                    }
+                }
+            }
+            seenProposalEntities.add(entityKey)
+            return {
+                ...proposal,
+                projectBomMatch: {
+                    status: 'NOT_ON_BOM',
+                    bomRowId: '',
+                    bomSectionTitle: '',
+                    quantity: 0,
+                    rationale: 'No BOM row for the exact matched catalog entity was found on this project.'
+                }
+            }
+        })
+    }
+
+    private static getBomProposalEntityKey(proposal: DocumentAnalysisBomProposal): string {
+        if (proposal.catalogMatch.status !== 'MATCHED') return ''
+        if (proposal.catalogMatch.entityType === 'DEVICE' && proposal.catalogMatch.deviceId) {
+            return `device:${String(proposal.catalogMatch.deviceId).trim().toLocaleLowerCase()}`
+        }
+        if (proposal.catalogMatch.entityType === 'PART' && proposal.catalogMatch.partId) {
+            return `part:${String(proposal.catalogMatch.partId).trim().toLocaleLowerCase()}`
+        }
+        return ''
+    }
+
+    private static bomRowMatchesProposalEntity(row: any, proposal: DocumentAnalysisBomProposal): boolean {
+        const normalizeId = (value: unknown) => String(value || '').trim().toLocaleLowerCase()
+        if (proposal.catalogMatch.entityType === 'DEVICE') {
+            const deviceId = normalizeId(proposal.catalogMatch.deviceId)
+            if (!deviceId) return false
+            const rowDeviceIds = [row?.deviceId, row?.sourceDeviceId].map(normalizeId).filter(Boolean)
+            if (rowDeviceIds.includes(deviceId)) return true
+            return rowDeviceIds.length === 0
+                && String(row?.sourceKind || '').trim().toLocaleLowerCase() === 'device'
+                && FirewireDocumentAnalysisData.normalizeCatalogIdentifier(row?.partNbr)
+                    === FirewireDocumentAnalysisData.normalizeCatalogIdentifier(proposal.catalogMatch.partNumber)
+        }
+
+        if (proposal.catalogMatch.entityType === 'PART') {
+            const partId = normalizeId(proposal.catalogMatch.partId)
+            if (!partId) return false
+            const rowPartId = normalizeId(row?.sourcePartId)
+            if (rowPartId === partId) return true
+            return !rowPartId
+                && String(row?.sourceKind || '').trim().toLocaleLowerCase() === 'part'
+                && FirewireDocumentAnalysisData.normalizeCatalogIdentifier(row?.partNbr)
+                    === FirewireDocumentAnalysisData.normalizeCatalogIdentifier(proposal.catalogMatch.partNumber)
+        }
+        return false
     }
 
     private static scoreCatalogDevice(proposal: DocumentAnalysisBomProposal, device: any, parts: any[]): {

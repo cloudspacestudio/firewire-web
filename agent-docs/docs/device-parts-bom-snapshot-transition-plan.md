@@ -117,7 +117,7 @@ Rules:
 - BOM rows created from devices default `includeOnFloorplan` from the device.
 - Document-analysis imports must preserve the approved BOM quantity and `floorplanQuantityTarget`; zero or partial placed-symbol counts must not overwrite either value.
 - Document-analysis BOM application is implemented for explicitly approved, exact device/master-part matches. Imported rows retain stable analysis/proposal/document provenance and idempotent application history; part-only rows are not floorplan-ready.
-- Floorplan placement progress is the count of annotations linked by stable `bomRowId`. Automated placement is complete only when that count equals `floorplanQuantityTarget`, unless the user explicitly changes the target.
+- Floorplan placement progress is the count of annotations linked by stable `bomRowId`. Document-analysis placement now creates retry-safe, provenance-backed annotations at approved normalized locations and refuses to exceed `floorplanQuantityTarget`; automated placement is complete only when that count equals the target, unless the user explicitly changes it.
 - BOM row money values should continue to follow the current whole-dollar BOM display/storage rule.
 
 ### bomRowParts
@@ -236,7 +236,7 @@ Do not reintroduce these legacy objects:
 - A device can be added to the BOM and creates a snapshot row plus `bomRowParts`.
 - A part can be added directly to the BOM without creating a device.
 - A free-form BOM row can be saved without matching a part or device.
-- Duplicate BOM rows for the same device or part are allowed and remain separate objects.
+- Manually created duplicate BOM rows for the same device or part remain allowed as separate objects. Document-analysis proposals are the exception: reinspection must mark an entity already represented on the project BOM, or repeated within the same proposal set, as ineligible so AI application cannot create an accidental duplicate row.
 - Editing BOM category/type does not orphan floorplan symbols.
 - Floorplan symbols reference BOM rows by id.
 - Reports, takeoff, summary, CSV export, and floorplan counts use BOM row snapshots.

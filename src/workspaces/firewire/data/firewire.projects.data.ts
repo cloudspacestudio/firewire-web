@@ -2,6 +2,7 @@ import * as express from 'express'
 import { FieldwireSDK } from '../../fieldwire/fieldwire'
 import { SqlDb } from '../../fieldwire/repository/sqldb'
 import { AzureBlobDocumentStorage } from './azure-blob-document-storage'
+import { FirewireDocumentAnalysisData } from './firewire.document-analysis.data'
 import {
     FirewireProjectFieldwireMapInput,
     FirewireProjectInput,
@@ -491,20 +492,37 @@ export class FirewireProjectsData {
                         }
 
                         const repository = new FirewireProjectRepository(req.app)
-                        const deleted = await repository.deleteFirewireProject(projectId)
-                        if (!deleted) {
+                        const project = await repository.getFirewireProject(projectId)
+                        if (!project) {
                             return res.status(404).json({
                                 message: 'Project not found.'
                             })
                         }
 
+                        let aiCleanup = { deletedOpenAiFileCount: 0, missingOpenAiFileCount: 0 }
+                        try {
+                            aiCleanup = await FirewireDocumentAnalysisData.prepareProjectDeletion(req.app, project.uuid)
+                            const deleted = await repository.deleteFirewireProject(project.uuid)
+                            if (!deleted) {
+                                FirewireDocumentAnalysisData.cancelProjectDeletion(project.uuid)
+                                return res.status(404).json({
+                                    message: 'Project not found.'
+                                })
+                            }
+                            FirewireDocumentAnalysisData.completeProjectDeletion(project.uuid)
+                        } catch (error) {
+                            FirewireDocumentAnalysisData.cancelProjectDeletion(project.uuid)
+                            throw error
+                        }
+
                         return res.status(200).json({
                             data: {
-                                deleted: true
+                                deleted: true,
+                                aiCleanup
                             }
                         })
                     } catch (err: Error | any) {
-                        return res.status(500).json({
+                        return res.status(Number(err?.statusCode || err?.status || 0) || 500).json({
                             message: err && err.message ? err.message : err
                         })
                     }

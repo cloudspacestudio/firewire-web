@@ -1,10 +1,13 @@
 import Ajv, { ValidateFunction } from 'ajv'
 import OpenAI, { APIError, toFile } from 'openai'
+import { PDFDocument } from 'pdf-lib'
 
-import { documentInspectionJsonSchema } from './document-analysis.schema'
+import { documentInspectionJsonSchema, floorplanSymbolLocationJsonSchema } from './document-analysis.schema'
 import {
     DocumentAnalysisProgress,
     DocumentAnalysisBomProposal,
+    DocumentAnalysisFloorplanProposal,
+    DocumentAnalysisFloorplanSymbolPlacement,
     DocumentAnalysisProjectContext,
     DocumentAnalysisProjectDetailProposal,
     DocumentAnalysisProjectField,
@@ -26,6 +29,8 @@ export interface InspectDocumentInput {
     versionId: string
     projectContext: DocumentAnalysisProjectContext
     onProgress?: (progress: Omit<DocumentAnalysisProgress, 'updatedAt'>) => void | Promise<void>
+    onOpenAiFileUploaded?: (fileId: string) => void | Promise<void>
+    onOpenAiFileDeleted?: (fileId: string, deletedAt: string) => void | Promise<void>
     signal?: AbortSignal
 }
 
@@ -36,6 +41,36 @@ export interface InspectDocumentOutput {
     openAiFileDeletedAt: string
     openAiResponseId: string
     openAiRequestId: string
+}
+
+export interface OpenAiFileCleanupResult {
+    deletedFileIds: string[]
+    missingFileIds: string[]
+}
+
+export interface LocateFloorplanSymbolsInput {
+    buffer: Buffer
+    filename: string
+    mimeType: string
+    projectId: string
+    documentId: string
+    versionId: string
+    floorplanName: string
+    sourcePageNumber: number
+    bomCandidates: Array<Pick<DocumentAnalysisBomProposal,
+        'proposalId' | 'deviceType' | 'symbolLabel' | 'manufacturer' | 'modelNumber' | 'partNumber' | 'description'> & {
+            expectedProjectQuantity: number
+        }>
+    signal?: AbortSignal
+}
+
+interface FloorplanAnalysisTile {
+    pageNumber: number
+    buffer: Buffer
+    xStartRatio: number
+    yStartRatio: number
+    widthRatio: number
+    heightRatio: number
 }
 
 export class DocumentAnalysisConfigurationError extends Error {}
@@ -61,13 +96,267 @@ export class OpenAiDocumentAnalysisService {
     private readonly apiKey = String(process.env.OPENAI_API_KEY || '').trim()
     private readonly model = String(process.env.OPENAI_MODEL || '').trim()
     private readonly validateResult: ValidateFunction
+    private readonly validateFloorplanLocations: ValidateFunction
 
     constructor() {
         this.validateResult = new Ajv({ allErrors: true, strict: false }).compile(documentInspectionJsonSchema)
+        this.validateFloorplanLocations = new Ajv({ allErrors: true, strict: false }).compile(floorplanSymbolLocationJsonSchema)
     }
 
     getConfiguredModel(): string {
         return this.model
+    }
+
+    async locateFloorplanSymbols(input: LocateFloorplanSymbolsInput): Promise<DocumentAnalysisFloorplanSymbolPlacement[]> {
+        this.validateConfiguration()
+        if (!input.buffer.length || String(input.mimeType || '').toLowerCase() !== 'application/pdf') {
+            throw new DocumentAnalysisInputError('Focused floorplan location analysis requires a readable PDF floorplan.', 400)
+        }
+        if (input.bomCandidates.length === 0) {
+            throw new DocumentAnalysisInputError('At least one document-derived BOM candidate is required before locating floorplan symbols.', 409)
+        }
+
+        const tiled = await this.createFloorplanAnalysisTiles(input.buffer)
+        const client = new OpenAI({
+            apiKey: this.apiKey,
+            timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000)
+        })
+        try {
+            const tileResults: DocumentAnalysisFloorplanSymbolPlacement[][] = new Array(tiled.tiles.length)
+            const tileErrors: unknown[] = []
+            let nextTileIndex = 0
+            const worker = async (): Promise<void> => {
+                while (nextTileIndex < tiled.tiles.length) {
+                    const tileIndex = nextTileIndex
+                    nextTileIndex += 1
+                    try {
+                        tileResults[tileIndex] = await this.locateFloorplanSymbolsInTile(client, input, tiled.tiles[tileIndex], tiled.tiles.length)
+                    } catch (error) {
+                        tileResults[tileIndex] = []
+                        tileErrors.push(error)
+                        console.error('OpenAI focused floorplan tile analysis failed.', {
+                            tilePage: tiled.tiles[tileIndex].pageNumber,
+                            message: error instanceof Error ? error.message : String(error || '')
+                        })
+                    }
+                }
+            }
+            await Promise.all(Array.from({ length: Math.min(3, tiled.tiles.length) }, () => worker()))
+            if (tileErrors.length > 0) {
+                throw new Error(`Focused floorplan analysis did not complete ${tileErrors.length} of ${tiled.tiles.length} enlarged regions. The prior symbol set was preserved.`)
+            }
+            const merged = this.deduplicateFloorplanPlacements(tileResults.flat())
+            console.info('[document-inspection] Focused floorplan region scan completed.', {
+                floorplanName: input.floorplanName,
+                regionCounts: tileResults.map((placements, index) => ({ region: index + 1, placements: placements.length })),
+                mergedPlacements: merged.length,
+                placementsByProposal: [...new Set(merged.map((placement) => placement.bomProposalId))].map((proposalId) => ({
+                    proposalId,
+                    placements: merged.filter((placement) => placement.bomProposalId === proposalId).length
+                }))
+            })
+            return merged
+        } catch (error) {
+            throw this.toProviderError(error)
+        }
+    }
+
+    private async locateFloorplanSymbolsInTile(
+        client: OpenAI,
+        input: LocateFloorplanSymbolsInput,
+        tile: FloorplanAnalysisTile,
+        tileCount: number
+    ): Promise<DocumentAnalysisFloorplanSymbolPlacement[]> {
+        let fileId = ''
+        try {
+            const uploadedFile = await client.files.create({
+                file: await toFile(tile.buffer, `tile-${tile.pageNumber}-${input.filename}`, { type: 'application/pdf' }),
+                purpose: 'user_data',
+                expires_after: { anchor: 'created_at', seconds: 24 * 60 * 60 }
+            }, { signal: input.signal })
+            fileId = uploadedFile.id
+            const response = await client.responses.create({
+                model: this.model,
+                store: false,
+                instructions: [
+                    'You are exhaustively locating fire alarm, sprinkler, or electronic security device symbols in one enlarged crop of a construction floorplan.',
+                    'Inspect every supported candidate one at a time and return one placement for every actual matching device graphic visible in this crop.',
+                    'Small repeated green symbols connected by green circuit lines are real device marks and must be counted. Red and other colored device graphics are also eligible.',
+                    'Use printed symbol shape, abbreviation, nearby device tag, and candidate description together. Do not require a symbol to have the same color as its Firewire bubble.',
+                    'Expected project quantity is a recall aid for the entire drawing, not a required count for this crop. Never invent marks to reach it.',
+                    'Exclude legend examples, schedules, title blocks, details, notes, room labels, circuit text, and wire junctions that are not device symbols.',
+                    'xRatio and yRatio must be the center of the colored device graphic in this one-page crop, normalized from 0 to 1 from top-left. Do not center on adjacent text.',
+                    'source.page must be "1" because the supplied PDF has exactly one crop page.',
+                    'Use only a supplied proposalId, copy its identity fields, and use empty placementId. Return an empty array only after checking every candidate across the entire crop.',
+                    `This is crop ${tile.pageNumber} of ${tileCount} from original PDF page ${input.sourcePageNumber}. Use ${JSON.stringify(input.filename)} in source.filename.`
+                ].join('\n'),
+                input: [{
+                    role: 'user',
+                    content: [
+                        { type: 'input_file', file_id: fileId, detail: 'high' },
+                        {
+                            type: 'input_text',
+                            text: [
+                                `Exhaustively locate supported symbols in this crop of ${JSON.stringify(input.floorplanName)}.`,
+                                'SUPPORTED_BOM_CANDIDATES',
+                                JSON.stringify(input.bomCandidates),
+                                'END_SUPPORTED_BOM_CANDIDATES'
+                            ].join('\n')
+                        }
+                    ]
+                }],
+                max_output_tokens: 12000,
+                metadata: {
+                    firewire_project_id: input.projectId,
+                    firewire_document_id: input.documentId,
+                    firewire_version_id: input.versionId,
+                    firewire_tile_page: String(tile.pageNumber)
+                },
+                text: {
+                    format: {
+                        type: 'json_schema',
+                        name: 'firewire_floorplan_symbol_locations',
+                        description: 'Reviewable device-symbol locations in one enlarged floorplan crop.',
+                        strict: true,
+                        schema: floorplanSymbolLocationJsonSchema
+                    }
+                }
+            }, { signal: input.signal })
+            if (response.status !== 'completed' || !response.output_text) {
+                throw new Error(`OpenAI did not complete floorplan crop ${tile.pageNumber}.`)
+            }
+            const parsed = JSON.parse(response.output_text) as { placements: DocumentAnalysisFloorplanSymbolPlacement[] }
+            if (!this.validateFloorplanLocations(parsed)) {
+                const details = this.validateFloorplanLocations.errors
+                    ?.map((error) => `${error.instancePath || '/'} ${error.message || 'is invalid'}`)
+                    .join('; ')
+                throw new Error(`OpenAI floorplan crop output failed schema validation: ${details || 'unknown validation error'}`)
+            }
+            const candidates = new Map(input.bomCandidates.map((candidate) => [candidate.proposalId, candidate]))
+            return (parsed.placements || []).filter((placement) =>
+                candidates.has(String(placement.bomProposalId || ''))
+                && Number(placement.confidence || 0) >= 0.45)
+                .map((placement, index) => {
+                    const candidate = candidates.get(placement.bomProposalId)!
+                    return {
+                        ...placement,
+                        placementId: `tile-${tile.pageNumber}-placement-${index + 1}`,
+                        deviceType: candidate.deviceType,
+                        symbolLabel: candidate.symbolLabel,
+                        manufacturer: candidate.manufacturer,
+                        modelNumber: candidate.modelNumber,
+                        partNumber: candidate.partNumber,
+                        xRatio: Math.max(0, Math.min(1, tile.xStartRatio + (Number(placement.xRatio || 0) * tile.widthRatio))),
+                        yRatio: Math.max(0, Math.min(1, tile.yStartRatio + (Number(placement.yRatio || 0) * tile.heightRatio))),
+                        confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0)))
+                    }
+                })
+        } finally {
+            if (fileId) {
+                try {
+                    await client.files.delete(fileId)
+                } catch (cleanupError) {
+                    console.error('OpenAI focused floorplan tile temporary file cleanup failed.', {
+                        fileId,
+                        tilePage: tile.pageNumber,
+                        message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError || '')
+                    })
+                }
+            }
+        }
+    }
+
+    private async createFloorplanAnalysisTiles(buffer: Buffer): Promise<{ tiles: FloorplanAnalysisTile[] }> {
+        const sourcePdf = await PDFDocument.load(buffer)
+        if (sourcePdf.getPageCount() !== 1) {
+            throw new DocumentAnalysisInputError('Focused floorplan location analysis requires a one-page PDF floorplan.', 409)
+        }
+        const sourcePage = sourcePdf.getPage(0)
+        const { x: cropX, y: cropY, width, height } = sourcePage.getCropBox()
+        const columns = 4
+        const rows = 3
+        const overlapXRatio = 0.02
+        const overlapYRatio = 0.025
+        const tiles: FloorplanAnalysisTile[] = []
+        let pageNumber = 0
+        for (let row = 0; row < rows; row += 1) {
+            for (let column = 0; column < columns; column += 1) {
+                const xStartRatio = Math.max(0, (column / columns) - overlapXRatio)
+                const xEndRatio = Math.min(1, ((column + 1) / columns) + overlapXRatio)
+                const yStartRatio = Math.max(0, (row / rows) - overlapYRatio)
+                const yEndRatio = Math.min(1, ((row + 1) / rows) + overlapYRatio)
+                const tileWidth = width * (xEndRatio - xStartRatio)
+                const tileHeight = height * (yEndRatio - yStartRatio)
+                const pdfYBottom = height * (1 - yEndRatio)
+                const outputPdf = await PDFDocument.create()
+                const embedded = await outputPdf.embedPage(sourcePage, {
+                    left: cropX + (width * xStartRatio),
+                    bottom: cropY + pdfYBottom,
+                    right: cropX + (width * xEndRatio),
+                    top: cropY + pdfYBottom + tileHeight
+                })
+                const outputPage = outputPdf.addPage([tileWidth, tileHeight])
+                outputPage.drawPage(embedded, { x: 0, y: 0, width: tileWidth, height: tileHeight })
+                pageNumber += 1
+                tiles.push({
+                    pageNumber,
+                    buffer: Buffer.from(await outputPdf.save()),
+                    xStartRatio,
+                    yStartRatio,
+                    widthRatio: xEndRatio - xStartRatio,
+                    heightRatio: yEndRatio - yStartRatio
+                })
+            }
+        }
+        return { tiles }
+    }
+
+    private deduplicateFloorplanPlacements(
+        placements: DocumentAnalysisFloorplanSymbolPlacement[]
+    ): DocumentAnalysisFloorplanSymbolPlacement[] {
+        const accepted: DocumentAnalysisFloorplanSymbolPlacement[] = []
+        for (const placement of [...placements].sort((left, right) => right.confidence - left.confidence)) {
+            const duplicate = accepted.some((candidate) => {
+                if (candidate.bomProposalId !== placement.bomProposalId) return false
+                const dx = candidate.xRatio - placement.xRatio
+                const dy = candidate.yRatio - placement.yRatio
+                return Math.sqrt((dx * dx) + (dy * dy)) <= 0.008
+            })
+            if (!duplicate) accepted.push(placement)
+        }
+        return accepted.sort((left, right) => left.yRatio - right.yRatio || left.xRatio - right.xRatio)
+            .map((placement, index) => ({ ...placement, placementId: `focused-placement-${index + 1}` }))
+    }
+
+    async deleteTemporaryFiles(fileIds: string[]): Promise<OpenAiFileCleanupResult> {
+        const uniqueFileIds = [...new Set(fileIds.map((fileId) => String(fileId || '').trim()).filter(Boolean))]
+        if (uniqueFileIds.length === 0) {
+            return { deletedFileIds: [], missingFileIds: [] }
+        }
+        if (!this.apiKey) {
+            throw new DocumentAnalysisConfigurationError(
+                'OpenAI is not configured, so retained temporary document files cannot be removed before deleting the project.'
+            )
+        }
+
+        const client = new OpenAI({
+            apiKey: this.apiKey,
+            timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000)
+        })
+        const result: OpenAiFileCleanupResult = { deletedFileIds: [], missingFileIds: [] }
+        for (const fileId of uniqueFileIds) {
+            try {
+                await client.files.delete(fileId)
+                result.deletedFileIds.push(fileId)
+            } catch (error) {
+                if (error instanceof APIError && error.status === 404) {
+                    result.missingFileIds.push(fileId)
+                    continue
+                }
+                throw this.toProviderError(error)
+            }
+        }
+        return result
     }
 
     async inspectDocument(input: InspectDocumentInput): Promise<InspectDocumentOutput> {
@@ -95,9 +384,14 @@ export class OpenAiDocumentAnalysisService {
                 }
             }, { signal: input.signal })
             openAiFileId = uploadedFile.id
+            await this.reportOpenAiFileUploaded(input, openAiFileId)
             await this.reportProgress(input, 'uploaded', 'Document uploaded. Starting structured analysis.', 50)
 
             await this.reportProgress(input, 'analyzing', 'OpenAI is reading the document and extracting grounded findings.', 60)
+            const configuredMaxOutputTokens = Number(process.env.OPENAI_DOCUMENT_MAX_OUTPUT_TOKENS || 30000)
+            const maxOutputTokens = Number.isFinite(configuredMaxOutputTokens)
+                ? Math.max(12000, Math.floor(configuredMaxOutputTokens))
+                : 30000
             const response = await this.withAnalysisHeartbeat(input, () => client.responses.create({
                 model: this.model,
                 store: false,
@@ -105,7 +399,7 @@ export class OpenAiDocumentAnalysisService {
                 input: [{
                     role: 'user',
                     content: [
-                        { type: 'input_file', file_id: uploadedFile.id, detail: 'auto' },
+                        { type: 'input_file', file_id: uploadedFile.id, detail: 'high' },
                         {
                             type: 'input_text',
                             text: [
@@ -118,7 +412,7 @@ export class OpenAiDocumentAnalysisService {
                         }
                     ]
                 }],
-                max_output_tokens: 12000,
+                max_output_tokens: maxOutputTokens,
                 metadata: {
                     firewire_project_id: input.projectId,
                     firewire_document_id: input.documentId,
@@ -159,6 +453,7 @@ export class OpenAiDocumentAnalysisService {
                 try {
                     await client.files.delete(openAiFileId)
                     openAiFileDeletedAt = new Date().toISOString()
+                    await this.reportOpenAiFileDeleted(input, openAiFileId, openAiFileDeletedAt)
                 } catch (cleanupError) {
                     console.error('OpenAI temporary document cleanup failed.', {
                         fileId: openAiFileId,
@@ -204,6 +499,34 @@ export class OpenAiDocumentAnalysisService {
         }
     }
 
+    private async reportOpenAiFileUploaded(input: InspectDocumentInput, fileId: string): Promise<void> {
+        if (!input.onOpenAiFileUploaded) {
+            return
+        }
+        try {
+            await input.onOpenAiFileUploaded(fileId)
+        } catch (error) {
+            console.error('OpenAI temporary document upload tracking failed.', {
+                fileId,
+                message: error instanceof Error ? error.message : String(error || '')
+            })
+        }
+    }
+
+    private async reportOpenAiFileDeleted(input: InspectDocumentInput, fileId: string, deletedAt: string): Promise<void> {
+        if (!input.onOpenAiFileDeleted) {
+            return
+        }
+        try {
+            await input.onOpenAiFileDeleted(fileId, deletedAt)
+        } catch (error) {
+            console.error('OpenAI temporary document deletion tracking failed.', {
+                fileId,
+                message: error instanceof Error ? error.message : String(error || '')
+            })
+        }
+    }
+
     private normalizeProjectActions(
         result: DocumentInspectionResult,
         context: DocumentAnalysisProjectContext
@@ -222,11 +545,56 @@ export class OpenAiDocumentAnalysisService {
             actions.push({ ...proposal, currentValue, proposedValue })
             return actions
         }, [])
+        const proposedBomActions = this.normalizeBomProposals(result.proposedBomActions || [])
         return {
             ...result,
             proposedActions,
-            proposedBomActions: this.normalizeBomProposals(result.proposedBomActions || [])
+            proposedBomActions,
+            proposedFloorplanActions: this.normalizeFloorplanProposals(
+                result.proposedFloorplanActions || [],
+                proposedBomActions
+            )
         }
+    }
+
+    private normalizeFloorplanProposals(
+        proposals: DocumentAnalysisFloorplanProposal[],
+        rawBomProposals: DocumentAnalysisBomProposal[]
+    ): DocumentAnalysisFloorplanProposal[] {
+        const normalized: DocumentAnalysisFloorplanProposal[] = []
+        const seenPages = new Set<number>()
+        for (const proposal of proposals) {
+            const pageNumber = Math.max(1, Math.floor(Number(proposal.pageNumber || 0)))
+            const name = String(proposal.name || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+            if (!name || seenPages.has(pageNumber)) continue
+            seenPages.add(pageNumber)
+            const proposalId = `floorplan-proposal-${normalized.length + 1}`
+            const symbolPlacements = (proposal.symbolPlacements || []).map((placement, index) => {
+                const matchedBom = rawBomProposals.find((candidate) => {
+                    const candidateIds = [candidate.partNumber, candidate.modelNumber, candidate.symbolLabel, candidate.deviceType]
+                        .map((value) => this.normalizeMatchText(value)).filter(Boolean)
+                    const placementIds = [placement.partNumber, placement.modelNumber, placement.symbolLabel, placement.deviceType]
+                        .map((value) => this.normalizeMatchText(value)).filter(Boolean)
+                    return placementIds.some((value) => candidateIds.includes(value))
+                })
+                return {
+                    ...placement,
+                    placementId: `${proposalId}-placement-${index + 1}`,
+                    bomProposalId: matchedBom?.proposalId || '',
+                    xRatio: Math.max(0, Math.min(1, Number(placement.xRatio || 0))),
+                    yRatio: Math.max(0, Math.min(1, Number(placement.yRatio || 0))),
+                    confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0)))
+                }
+            }).filter((placement) => !!placement.bomProposalId && placement.confidence >= 0.65)
+            normalized.push({
+                ...proposal,
+                proposalId,
+                name,
+                pageNumber,
+                symbolPlacements
+            })
+        }
+        return normalized
     }
 
     private normalizeBomProposals(proposals: DocumentAnalysisBomProposal[]): DocumentAnalysisBomProposal[] {
@@ -462,6 +830,11 @@ export class OpenAiDocumentAnalysisService {
             'If both quantities agree, use MATCHED. If only one exists, use SCHEDULE_ONLY or DRAWING_ONLY. The server will validate this reconciliation again.',
             'floorplanSymbolFound means the document contains a floorplan symbol or legend mark for this device. floorplanPlacementTarget may equal reconciledQuantity only when a symbol was found and there is no quantity conflict.',
             'Use empty proposalId and a NOT_EVALUATED catalogMatch with entityType NONE and blank match fields; Firewire will assign proposal identity and perform catalog matching after extraction.',
+            'proposedFloorplanActions identifies every distinct plan sheet/page that can become a Firewire floorplan. Return one proposal per plan page, because a document may contain multiple floorplans.',
+            'Only propose a floorplan for a PDF page that visibly contains a usable plan drawing. Use the printed sheet title or drawing number as name, pageNumber as the one-based PDF page number, and preserve source provenance.',
+            'For every actual device symbol visible inside that plan area, add one symbolPlacements item at the center of the symbol. xRatio and yRatio are normalized from 0 to 1 across the full PDF page, from top-left.',
+            'Exclude legend examples, schedules, details, title-block symbols, and uncertain marks from symbolPlacements. Do not approximate a location that cannot be seen.',
+            'Use empty placementId and bomProposalId; Firewire assigns stable IDs and links placements to normalized BOM proposals after extraction.',
             'Keep manufacturer, modelNumber, and partNumber separate. partNumber must contain only the equipment identifier as printed, for example N-ANN-80, and must not be prefixed with manufacturer, category, or description text.',
             'Do not merge different device types merely because they have the same quantity. Preserve symbol label, manufacturer, model, part number, description, and separate schedule/drawing provenance.',
             'Risks are professional review aids, not legal, engineering, contractual, or AHJ determinations.'

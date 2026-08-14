@@ -529,33 +529,51 @@ export class FirewireProjectRepository {
         }
 
         const pool = await this.getPool()
-        await pool.request()
-            .input('projectId', mssql.UniqueIdentifier, projectId)
-            .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;')
+        const tx = new mssql.Transaction(pool)
+        await tx.begin()
+        try {
+            await new mssql.Request(tx)
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query([
+                    "IF OBJECT_ID(N'dbo.bomRowParts', N'U') IS NOT NULL",
+                    'BEGIN',
+                    '    DELETE FROM dbo.bomRowParts WHERE projectId = @projectId;',
+                    'END;'
+                ].join('\n'))
 
-        await pool.request()
-            .input('workspaceKey', mssql.NVarChar(200), projectId)
-            .query([
-                "IF OBJECT_ID(N'dbo.workspaceStorage', N'U') IS NOT NULL",
-                'BEGIN',
-                "    DELETE FROM dbo.workspaceStorage WHERE [area] = N'project-doc-library' AND [workspaceKey] = @workspaceKey;",
-                'END;'
-            ].join('\n'))
+            await new mssql.Request(tx)
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query('DELETE FROM dbo.firewireProjectWorksheets WHERE projectId = @projectId;')
 
-        await pool.request()
-            .input('projectId', mssql.UniqueIdentifier, projectId)
-            .query([
-                "IF OBJECT_ID(N'dbo.firewireProjectActivityLog', N'U') IS NOT NULL",
-                'BEGIN',
-                '    DELETE FROM dbo.firewireProjectActivityLog WHERE projectId = @projectId;',
-                'END;'
-            ].join('\n'))
+            await new mssql.Request(tx)
+                .input('workspaceKey', mssql.NVarChar(200), projectId)
+                .query([
+                    "IF OBJECT_ID(N'dbo.workspaceStorage', N'U') IS NOT NULL",
+                    'BEGIN',
+                    "    DELETE FROM dbo.workspaceStorage WHERE [area] = N'project-doc-library' AND [workspaceKey] = @workspaceKey;",
+                    "    DELETE FROM dbo.workspaceStorage WHERE [area] = N'project-document-analysis' AND [workspaceKey] = @workspaceKey;",
+                    'END;'
+                ].join('\n'))
 
-        const result = await pool.request()
-            .input('uuid', mssql.UniqueIdentifier, projectId)
-            .query('DELETE FROM dbo.firewireProjects WHERE uuid = @uuid;')
+            await new mssql.Request(tx)
+                .input('projectId', mssql.UniqueIdentifier, projectId)
+                .query([
+                    "IF OBJECT_ID(N'dbo.firewireProjectActivityLog', N'U') IS NOT NULL",
+                    'BEGIN',
+                    '    DELETE FROM dbo.firewireProjectActivityLog WHERE projectId = @projectId;',
+                    'END;'
+                ].join('\n'))
 
-        return !!result.rowsAffected && result.rowsAffected[0] > 0
+            const result = await new mssql.Request(tx)
+                .input('uuid', mssql.UniqueIdentifier, projectId)
+                .query('DELETE FROM dbo.firewireProjects WHERE uuid = @uuid;')
+            const deleted = !!result.rowsAffected && result.rowsAffected[0] > 0
+            await tx.commit()
+            return deleted
+        } catch (error) {
+            await tx.rollback()
+            throw error
+        }
     }
 
     async updateFieldwireMapping(projectId: string, input: FirewireProjectFieldwireMapInput, userId: string): Promise<FirewireProjectRecord | null> {

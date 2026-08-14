@@ -21,6 +21,8 @@ export type DocumentAnalysisProjectValueType = 'TEXT' | 'NUMBER' | 'DATE'
 export type DocumentAnalysisBomQuantityStatus = 'MATCHED' | 'SCHEDULE_ONLY' | 'DRAWING_ONLY' | 'CONFLICT' | 'UNKNOWN'
 export type DocumentAnalysisCatalogMatchStatus = 'NOT_EVALUATED' | 'MATCHED' | 'POSSIBLE' | 'NOT_FOUND'
 export type DocumentAnalysisCatalogEntityType = 'NONE' | 'DEVICE' | 'PART'
+export type DocumentAnalysisProjectBomMatchStatus = 'NOT_EVALUATED' | 'NOT_ON_BOM' | 'ALREADY_ON_BOM' | 'DUPLICATE_PROPOSAL'
+export type DocumentAnalysisFloorplanMatchStatus = 'NOT_EVALUATED' | 'MISSING' | 'ALREADY_EXISTS' | 'CREATED'
 
 export interface DocumentAnalysisProgress {
     stage: string
@@ -108,6 +110,44 @@ export interface DocumentAnalysisBomProposal {
         confidence: number
         rationale: string
     }
+    projectBomMatch?: {
+        status: DocumentAnalysisProjectBomMatchStatus
+        bomRowId: string
+        bomSectionTitle: string
+        quantity: number
+        rationale: string
+    }
+}
+
+export interface DocumentAnalysisFloorplanSymbolPlacement {
+    placementId: string
+    bomProposalId: string
+    deviceType: string
+    symbolLabel: string
+    manufacturer: string
+    modelNumber: string
+    partNumber: string
+    xRatio: number
+    yRatio: number
+    confidence: number
+    source: DocumentAnalysisSource
+}
+
+export interface DocumentAnalysisFloorplanProposal {
+    proposalId: string
+    actionType: 'CREATE_FLOORPLAN'
+    name: string
+    pageNumber: number
+    evidenceType: DocumentAnalysisEvidenceType
+    confidence: number
+    rationale: string
+    source: DocumentAnalysisSource
+    symbolPlacements: DocumentAnalysisFloorplanSymbolPlacement[]
+    floorplanMatch?: {
+        status: DocumentAnalysisFloorplanMatchStatus
+        floorplanFileId: string
+        rationale: string
+    }
 }
 
 export interface DocumentAnalysisProjectContext {
@@ -175,6 +215,26 @@ export interface DocumentAnalysisDeviceCreationApplication {
     floorplanLabelText: string
 }
 
+export interface DocumentAnalysisFloorplanApplication {
+    id: string
+    appliedAt: string
+    appliedBy: string
+    proposalId: string
+    floorplanFileId: string
+    floorplanName: string
+    pageNumber: number
+}
+
+export interface DocumentAnalysisFloorplanPlacementApplication {
+    id: string
+    appliedAt: string
+    appliedBy: string
+    proposalId: string
+    floorplanFileId: string
+    placementIds: string[]
+    annotationIds: string[]
+}
+
 export interface DocumentInspectionResult {
     document: {
         originalFilename: string
@@ -204,6 +264,7 @@ export interface DocumentInspectionResult {
     openQuestions: DocumentAnalysisFinding[]
     proposedActions: DocumentAnalysisProjectDetailProposal[]
     proposedBomActions: DocumentAnalysisBomProposal[]
+    proposedFloorplanActions: DocumentAnalysisFloorplanProposal[]
     executiveSummary: string
 }
 
@@ -232,6 +293,8 @@ export interface DocumentAnalysisRecord {
     actionApplications?: DocumentAnalysisActionApplication[]
     bomActionApplications?: DocumentAnalysisBomActionApplication[]
     deviceCreationApplications?: DocumentAnalysisDeviceCreationApplication[]
+    floorplanApplications?: DocumentAnalysisFloorplanApplication[]
+    floorplanPlacementApplications?: DocumentAnalysisFloorplanPlacementApplication[]
 }
 
 export interface DocumentAnalysisWorkspace {

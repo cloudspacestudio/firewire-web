@@ -120,7 +120,52 @@ const bomProposalSchema = {
     ]
 }
 
-export const DOCUMENT_INSPECTION_SCHEMA_VERSION = 4
+const floorplanSymbolPlacementSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        placementId: { type: 'string' },
+        bomProposalId: { type: 'string' },
+        deviceType: { type: 'string' },
+        symbolLabel: { type: 'string' },
+        manufacturer: { type: 'string' },
+        modelNumber: { type: 'string' },
+        partNumber: { type: 'string' },
+        xRatio: { type: 'number', minimum: 0, maximum: 1 },
+        yRatio: { type: 'number', minimum: 0, maximum: 1 },
+        confidence: { type: 'number' },
+        source: sourceSchema
+    },
+    required: [
+        'placementId', 'bomProposalId', 'deviceType', 'symbolLabel', 'manufacturer',
+        'modelNumber', 'partNumber', 'xRatio', 'yRatio', 'confidence', 'source'
+    ]
+}
+
+const floorplanProposalSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        proposalId: { type: 'string' },
+        actionType: { type: 'string', enum: ['CREATE_FLOORPLAN'] },
+        name: { type: 'string' },
+        pageNumber: { type: 'integer', minimum: 1 },
+        evidenceType: {
+            type: 'string',
+            enum: ['DOCUMENT_FACT', 'AI_INTERPRETATION', 'ASSUMPTION', 'UNRESOLVED_QUESTION']
+        },
+        confidence: { type: 'number' },
+        rationale: { type: 'string' },
+        source: sourceSchema,
+        symbolPlacements: { type: 'array', items: floorplanSymbolPlacementSchema }
+    },
+    required: [
+        'proposalId', 'actionType', 'name', 'pageNumber', 'evidenceType', 'confidence',
+        'rationale', 'source', 'symbolPlacements'
+    ]
+}
+
+export const DOCUMENT_INSPECTION_SCHEMA_VERSION = 5
 
 export const documentInspectionJsonSchema = {
     type: 'object',
@@ -210,10 +255,27 @@ export const documentInspectionJsonSchema = {
             type: 'array',
             items: bomProposalSchema
         },
+        proposedFloorplanActions: {
+            type: 'array',
+            items: floorplanProposalSchema
+        },
         executiveSummary: { type: 'string' }
     },
     required: [
         'document', 'projectDetails', 'scope', 'requirements', 'codes',
-        'risks', 'openQuestions', 'proposedActions', 'proposedBomActions', 'executiveSummary'
+        'risks', 'openQuestions', 'proposedActions', 'proposedBomActions',
+        'proposedFloorplanActions', 'executiveSummary'
     ]
+}
+
+export const floorplanSymbolLocationJsonSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        placements: {
+            type: 'array',
+            items: floorplanSymbolPlacementSchema
+        }
+    },
+    required: ['placements']
 }

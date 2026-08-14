@@ -160,6 +160,21 @@ export interface DocumentAnalysisBomActionApplication {
     }>
 }
 
+export interface DocumentAnalysisDeviceCreationApplication {
+    id: string
+    createdAt: string
+    createdBy: string
+    proposalId: string
+    partId: string
+    deviceId: string
+    created: boolean
+    name: string
+    shortName: string
+    categoryName: string
+    includeOnFloorplan: boolean
+    floorplanLabelText: string
+}
+
 export interface DocumentInspectionResult {
     document: {
         originalFilename: string
@@ -216,6 +231,7 @@ export interface DocumentAnalysisRecord {
     progress?: DocumentAnalysisProgress
     actionApplications?: DocumentAnalysisActionApplication[]
     bomActionApplications?: DocumentAnalysisBomActionApplication[]
+    deviceCreationApplications?: DocumentAnalysisDeviceCreationApplication[]
 }
 
 export interface DocumentAnalysisWorkspace {

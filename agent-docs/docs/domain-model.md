@@ -171,6 +171,8 @@ Per-document AI inspection may persist proposed project-detail actions alongside
 
 Per-document BOM proposals are also review artifacts. Explicitly applying eligible proposals creates independent snapshot rows under the `document-analysis` BOM section. Each imported row retains the analysis/proposal/document identifiers, approved quantity, quantity source, and placement target. Exact reusable-device matches snapshot the device and linked parts; exact master-part matches create BOM-only rows. Ambiguous, missing, or quantity-conflict proposals require human resolution and cannot be applied directly.
 
+A user may resolve a document proposal's displayed master-part candidate by creating a reusable Firewire device from the findings dialog. This is an explicit global catalog mutation, not an AI side effect. The resulting device links the canonical part, may be floorplan-enabled, uses the confirmed legend label as its initial bubble label, and converts that proposal to an exact device match. Store proposal/device/part/user/timestamp application metadata so retries reuse the same result. A legend label is not equivalent to extracted icon artwork; icon extraction must retain the exact source page and crop bounds.
+
 The canonical project `address` represents the project/job-site location. Customer Info `billingAddress` represents the customer's accounting address and may legitimately differ or remain blank. Document analysis must target these fields independently and applying a Project Address proposal must not implicitly populate Billing Address.
 
 ## Vendors And Part Imports

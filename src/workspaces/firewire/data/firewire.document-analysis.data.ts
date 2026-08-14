@@ -9,6 +9,7 @@ import {
     DocumentAnalysisActionApplication,
     DocumentAnalysisBomActionApplication,
     DocumentAnalysisBomProposal,
+    DocumentAnalysisDeviceCreationApplication,
     DocumentAnalysisRecord,
     DocumentAnalysisProgress,
     DocumentAnalysisProjectDetailProposal,
@@ -23,6 +24,7 @@ import {
 } from '../ai/openai-document-analysis.service'
 import { FirewireProjectRecord, FirewireProjectRepository } from '../repository/firewireproject.repository'
 import { AzureBlobDocumentStorage } from './azure-blob-document-storage'
+import { FirewireData } from './firewire.data'
 
 const DOCUMENT_ANALYSIS_AREA = 'project-document-analysis'
 const DOCUMENT_LIBRARY_AREA = 'project-doc-library'
@@ -543,6 +545,182 @@ export class FirewireDocumentAnalysisData {
         },
         {
             method: 'post',
+            path: '/api/firewire/projects/:projectId/document-analysis/files/:fileId/versions/:versionId/actions/bom/proposals/:proposalId/create-device',
+            fx: async (req: express.Request, res: express.Response) => {
+                try {
+                    const context = await FirewireDocumentAnalysisData.resolveRequestContext(req)
+                    if (!context) {
+                        return res.status(404).json({ message: 'Project or document version was not found.' })
+                    }
+                    const analysisId = String(req.body?.analysisId || '').trim()
+                    const proposalId = String(req.params.proposalId || '').trim()
+                    if (!analysisId || !proposalId) {
+                        return res.status(400).json({ message: 'analysisId and proposalId are required.' })
+                    }
+
+                    const workspace = await FirewireDocumentAnalysisData.loadAnalysisWorkspace(context.sqldb, context.project.uuid)
+                    const record = workspace.analyses.find((item) =>
+                        item.id === analysisId
+                        && item.workspaceKey === context.workspaceKey
+                        && item.documentId === context.file.id
+                        && item.versionId === context.version.id)
+                    if (!record || record.status !== 'completed' || !record.result) {
+                        return res.status(404).json({ message: 'The completed inspection result was not found.' })
+                    }
+                    const proposal = (record.result.proposedBomActions || []).find((item) => item.proposalId === proposalId)
+                    if (!proposal) {
+                        return res.status(404).json({ message: 'The stored BOM proposal was not found.' })
+                    }
+                    const priorApplication = (record.deviceCreationApplications || []).find((item) => item.proposalId === proposalId)
+                    if (priorApplication) {
+                        const existingDevice = await context.sqldb.getDevice(priorApplication.deviceId)
+                        if (existingDevice) {
+                            return res.status(200).json({
+                                data: {
+                                    record: FirewireDocumentAnalysisData.toClientRecord(record),
+                                    proposal,
+                                    device: existingDevice,
+                                    application: priorApplication
+                                }
+                            })
+                        }
+                    }
+                    const alreadyAppliedToBom = (record.bomActionApplications || []).some((application) =>
+                        application.proposalIds.includes(proposalId))
+                    if (alreadyAppliedToBom) {
+                        return res.status(409).json({
+                            message: 'This proposal has already been applied to the BOM. Create or select a device from the BOM row instead.',
+                            code: 'DOCUMENT_DEVICE_PROPOSAL_ALREADY_APPLIED'
+                        })
+                    }
+                    if (proposal.quantityStatus === 'CONFLICT' || proposal.reconciledQuantity <= 0) {
+                        return res.status(409).json({
+                            message: 'Resolve the proposal quantity conflict before creating a floorplan device.',
+                            code: 'DOCUMENT_DEVICE_QUANTITY_REQUIRES_REVIEW'
+                        })
+                    }
+                    if (proposal.catalogMatch.entityType !== 'PART' || !proposal.catalogMatch.partId) {
+                        return res.status(409).json({
+                            message: 'A canonical master part must be selected before creating a device.',
+                            code: 'DOCUMENT_DEVICE_PART_REQUIRED'
+                        })
+                    }
+
+                    const partId = String(proposal.catalogMatch.partId).trim()
+                    const parts = await context.sqldb.getParts()
+                    const part = parts.find((candidate) => String(candidate.partId || '') === partId)
+                    if (!part) {
+                        return res.status(409).json({ message: 'The selected master part no longer exists. Re-inspect before creating a device.' })
+                    }
+                    const vendorId = String(part.vendorId || '').trim()
+                    const vendor = vendorId ? await context.sqldb.getVendorById(vendorId) : null
+                    if (!vendor) {
+                        return res.status(409).json({ message: 'The selected master part does not have a valid Firewire vendor.' })
+                    }
+
+                    const name = FirewireDocumentAnalysisData.normalizeRequiredDeviceText(req.body?.name, 'Device name', 200)
+                    const shortName = FirewireDocumentAnalysisData.normalizeRequiredDeviceText(req.body?.shortName, 'Short name', 50)
+                    const categoryName = FirewireDocumentAnalysisData.normalizeDeviceText(req.body?.categoryName, 120)
+                    const floorplanLabelText = FirewireDocumentAnalysisData.normalizeDeviceText(req.body?.floorplanLabelText, 4)
+                    const includeOnFloorplan = req.body?.includeOnFloorplan !== false
+                    const defaultLabor = Number(req.body?.defaultLabor ?? 112)
+                    if (!Number.isFinite(defaultLabor) || defaultLabor < 0) {
+                        return res.status(400).json({ message: 'Default labor must be a non-negative number.' })
+                    }
+
+                    let created = true
+                    let device: any
+                    try {
+                        const creation = await FirewireData.createDeviceFromVendorPart(
+                            context.sqldb,
+                            vendor,
+                            String(part.partNumber || part.PartNumber || '').trim(),
+                            part,
+                            {
+                                name,
+                                shortName,
+                                categoryName,
+                                includeOnFloorplan,
+                                floorplanLabelText,
+                                defaultLabor
+                            }
+                        )
+                        device = creation.device
+                    } catch (error: any) {
+                        if (Number(error?.status || 0) === 409 && error?.data?.deviceId) {
+                            created = false
+                            device = error.data
+                        } else {
+                            throw error
+                        }
+                    }
+                    if (!device?.deviceId) {
+                        throw new Error('The device was created but could not be reloaded.')
+                    }
+
+                    const updatedProposal: DocumentAnalysisBomProposal = {
+                        ...proposal,
+                        catalogMatch: {
+                            status: 'MATCHED',
+                            entityType: 'DEVICE',
+                            deviceId: String(device.deviceId),
+                            deviceName: String(device.name || name),
+                            partId,
+                            partNumber: String(device.partNumber || part.partNumber || part.PartNumber || ''),
+                            vendorName: String(device.vendorName || vendor.name || ''),
+                            confidence: 1,
+                            rationale: created
+                                ? `User created this Firewire device from the displayed master part ${String(part.partNumber || part.PartNumber || '').trim()}.`
+                                : `User confirmed the existing Firewire device for master part ${String(part.partNumber || part.PartNumber || '').trim()}.`
+                        }
+                    }
+                    const proposedBomActions = (record.result.proposedBomActions || []).map((item) =>
+                        item.proposalId === proposalId ? updatedProposal : item)
+                    const userId = FirewireDocumentAnalysisData.resolveUserId(req)
+                    const application: DocumentAnalysisDeviceCreationApplication = {
+                        id: `device-creation-${randomUUID()}`,
+                        createdAt: new Date().toISOString(),
+                        createdBy: userId,
+                        proposalId,
+                        partId,
+                        deviceId: String(device.deviceId),
+                        created,
+                        name: String(device.name || name),
+                        shortName: String(device.shortName || shortName),
+                        categoryName: String(device.categoryName || categoryName),
+                        includeOnFloorplan: !!device.includeOnFloorplan,
+                        floorplanLabelText: String(device.floorplanLabelText || floorplanLabelText)
+                    }
+                    const updatedRecord: DocumentAnalysisRecord = {
+                        ...record,
+                        result: { ...record.result, proposedBomActions },
+                        deviceCreationApplications: [application, ...(record.deviceCreationApplications || [])].slice(0, 100)
+                    }
+                    await FirewireDocumentAnalysisData.saveAnalysisRecord(context.sqldb, updatedRecord, userId)
+                    console.info('[document-inspection] Missing device resolved from master part.', {
+                        analysisId,
+                        proposalId,
+                        partId,
+                        deviceId: device.deviceId,
+                        created,
+                        createdBy: userId
+                    })
+                    return res.status(created ? 201 : 200).json({
+                        data: {
+                            record: FirewireDocumentAnalysisData.toClientRecord(updatedRecord),
+                            proposal: updatedProposal,
+                            device,
+                            application
+                        }
+                    })
+                } catch (err: Error | any) {
+                    const statusCode = Number(err?.status || 0) || (err instanceof DocumentAnalysisInputError ? err.statusCode : 500)
+                    return res.status(statusCode).json({ message: FirewireDocumentAnalysisData.getSafeErrorMessage(err) })
+                }
+            }
+        },
+        {
+            method: 'post',
             path: '/api/firewire/projects/:projectId/document-analysis/files/:fileId/versions/:versionId',
             fx: async (req: express.Request, res: express.Response) => {
                 console.info('[document-inspection] Inspection POST received.', {
@@ -877,6 +1055,18 @@ export class FirewireDocumentAnalysisData {
 
     private static getInspectionKey(projectId: string, workspaceKey: string, documentId: string, versionId: string): string {
         return [projectId, workspaceKey, documentId, versionId].join(':')
+    }
+
+    private static normalizeDeviceText(value: unknown, maxLength: number): string {
+        return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+    }
+
+    private static normalizeRequiredDeviceText(value: unknown, label: string, maxLength: number): string {
+        const normalized = FirewireDocumentAnalysisData.normalizeDeviceText(value, maxLength)
+        if (!normalized) {
+            throw new DocumentAnalysisInputError(`${label} is required.`, 400)
+        }
+        return normalized
     }
 
     private static logProgress(record: DocumentAnalysisRecord): void {

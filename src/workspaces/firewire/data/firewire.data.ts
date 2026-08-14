@@ -3087,7 +3087,7 @@ export class FirewireData {
         return String(partNumber || '').trim().toLowerCase()
     }
 
-    private static async createDeviceFromVendorPart(
+    static async createDeviceFromVendorPart(
         sqldb: SqlDb,
         vendor: Vendor,
         partNumber: string,
@@ -3130,7 +3130,7 @@ export class FirewireData {
             floorplanLabelText,
             partNumber,
             link: '',
-            cost: Number(part.SalesPrice || part.MSRPPrice || 0),
+            cost: FirewireData.resolvePartCost(part),
             defaultLabor,
             iconId: null,
             iconForegroundColor: '#210507',

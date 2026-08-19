@@ -92,6 +92,8 @@ Angular media/document surfaces should use a common service before page-local `H
 
 UI surfaces that list uploaded files should consistently offer upload, inline preview, download using the original filename, and delete when the user's permissions/state allow those actions. Prefer icon buttons with tooltips in a table/list actions column. Delete remains a destructive action and should use the shared red delete styling.
 
+Large Document Library uploads must expose browser upload progress through `ProjectDocLibraryStorageService` rather than leaving page components waiting on an opaque final response. Project Detail and Sales Quick Start pass the same aggregate upload indicator into `FirewireDocLibraryExplorerComponent`: show the active filename, file index/count, total byte progress, percentage, and a determinate progress bar. Treat request-body transfer and server finalization as separate phases. Once all bytes have reached the API, keep the indicator visible with a finalizing/storage message until Azure Blob upload and workspace registration return successfully; then replace it with the normal completion status. Multi-file percentages are weighted by file size, not averaged per file.
+
 ## OpenAI Document Analysis Pattern
 
 Keep OpenAI calls server-side and route them through focused services under `src/workspaces/firewire/ai`; do not call OpenAI from Angular or place analysis prompts in route handlers. Resolve the canonical Firewire project first, validate that the requested Document Library workspace belongs to that project, and read file bytes through `AzureBlobDocumentStorage`.

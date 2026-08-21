@@ -79,7 +79,7 @@ const bomProposalSchema = {
         scheduleQuantity: { type: 'integer', minimum: 0 },
         drawingQuantityFound: { type: 'boolean' },
         drawingQuantity: { type: 'integer', minimum: 0 },
-        quantityStatus: { type: 'string', enum: ['MATCHED', 'SCHEDULE_ONLY', 'DRAWING_ONLY', 'CONFLICT', 'UNKNOWN'] },
+        quantityStatus: { type: 'string', enum: ['MATCHED', 'SCHEDULE_ONLY', 'DRAWING_ONLY', 'LEGEND_ONLY', 'CONFLICT', 'UNKNOWN'] },
         reconciledQuantity: { type: 'integer', minimum: 0 },
         floorplanSymbolFound: { type: 'boolean' },
         floorplanPlacementTarget: { type: 'integer', minimum: 0 },

@@ -619,6 +619,12 @@ export class OpenAiDocumentAnalysisService {
             } else if (drawingQuantityFound) {
                 quantityStatus = 'DRAWING_ONLY'
                 reconciledQuantity = drawingQuantity
+            } else if (proposal.floorplanSymbolFound) {
+                // A legend is authoritative evidence that the device belongs to the drawing set,
+                // even when the first pass cannot reliably count its plan instances. Keep the
+                // candidate available for catalog/BOM review with a clearly provisional unit.
+                quantityStatus = 'LEGEND_ONLY'
+                reconciledQuantity = 1
             }
             const identity = [
                 proposal.partNumber,
@@ -629,7 +635,9 @@ export class OpenAiDocumentAnalysisService {
             if (!identity || quantityStatus === 'UNKNOWN') {
                 continue
             }
-            const floorplanPlacementTarget = proposal.floorplanSymbolFound && reconciledQuantity > 0
+            const floorplanPlacementTarget = proposal.floorplanSymbolFound
+                && quantityStatus !== 'LEGEND_ONLY'
+                && reconciledQuantity > 0
                 ? reconciledQuantity
                 : 0
             normalized.push({
@@ -643,6 +651,9 @@ export class OpenAiDocumentAnalysisService {
                 reconciledQuantity,
                 floorplanSymbolFound: !!proposal.floorplanSymbolFound,
                 floorplanPlacementTarget,
+                quantityRationale: quantityStatus === 'LEGEND_ONLY'
+                    ? `Legend-derived device candidate. A provisional BOM quantity of 1 is suggested because no reliable schedule or plan count was found. ${String(proposal.quantityRationale || '').trim()}`.trim()
+                    : proposal.quantityRationale,
                 catalogMatch: {
                     status: 'NOT_EVALUATED',
                     entityType: 'NONE',
@@ -822,13 +833,15 @@ export class OpenAiDocumentAnalysisService {
             'Do not propose salesman, project status, difficulty, coordinates, code applicability, or any field that is not in the schema.',
             'A project-detail proposal must preserve evidenceType, confidence, rationale, and source provenance. Prefer DOCUMENT_FACT; make interpretations visibly AI_INTERPRETATION.',
             'proposedBomActions extracts device candidates and quantities for later human review. Do not claim a BOM row was created.',
-            'Create a BOM proposal only when the document provides a positive schedule quantity, a positive drawing symbol count, or both. Do not guess quantities.',
+            'Create a BOM proposal when the document provides a positive schedule quantity, a positive drawing symbol count, or a distinct device entry in a symbol/device legend. Do not omit a legend device merely because its plan quantity cannot yet be counted.',
+            'Inspect every symbol, device, equipment, and annunciation legend exhaustively, row by row. Capture the printed symbol label, description, manufacturer, model, part number, and source location separately. Ignore wire-only line types, room labels, drafting marks, and non-device abbreviations.',
+            'For a legend-only device with no reliable schedule or drawing count, set both quantity Found flags false and quantities 0, set quantityStatus UNKNOWN and reconciledQuantity 0, set floorplanSymbolFound true, and explain that it is legend-derived. The server will retain it as a reviewable provisional BOM candidate.',
             'Return at most one BOM proposal per unique device/equipment identity. Use whole-document totals when the same device appears on multiple plan pages.',
             'Keep scheduleQuantity and drawingQuantity as separate evidence. Set the corresponding Found boolean false and quantity 0 when that evidence was not located.',
             'drawingQuantity counts actual device-symbol placements in plan areas. Exclude symbols shown only in legends, schedules, details, examples, or title blocks.',
             'If schedule and drawing quantities disagree, use CONFLICT and reconciledQuantity 0. Never silently choose one count.',
             'If both quantities agree, use MATCHED. If only one exists, use SCHEDULE_ONLY or DRAWING_ONLY. The server will validate this reconciliation again.',
-            'floorplanSymbolFound means the document contains a floorplan symbol or legend mark for this device. floorplanPlacementTarget may equal reconciledQuantity only when a symbol was found and there is no quantity conflict.',
+            'floorplanSymbolFound means the document contains a floorplan symbol or legend mark for this device. A legend-only mark supports device discovery but not a placement coordinate. floorplanPlacementTarget may equal reconciledQuantity only when actual plan symbols were counted and there is no quantity conflict.',
             'Use empty proposalId and a NOT_EVALUATED catalogMatch with entityType NONE and blank match fields; Firewire will assign proposal identity and perform catalog matching after extraction.',
             'proposedFloorplanActions identifies every distinct plan sheet/page that can become a Firewire floorplan. Return one proposal per plan page, because a document may contain multiple floorplans.',
             'Only propose a floorplan for a PDF page that visibly contains a usable plan drawing. Use the printed sheet title or drawing number as name, pageNumber as the one-based PDF page number, and preserve source provenance.',

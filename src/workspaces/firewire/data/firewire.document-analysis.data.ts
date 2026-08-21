@@ -147,7 +147,7 @@ export class FirewireDocumentAnalysisData {
                         && item.documentId === context.file.id
                         && item.versionId === context.version.id)
                     if (!record) {
-                        return res.status(404).json({ message: 'This document version has not been inspected.' })
+                        return res.status(200).json({ data: null })
                     }
 
                     const inspectionKey = FirewireDocumentAnalysisData.getInspectionKey(

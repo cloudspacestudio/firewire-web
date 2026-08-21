@@ -18,7 +18,7 @@ export type DocumentAnalysisProjectField =
     | 'customerInfo.billingPhone'
     | 'customerInfo.contractOrPoNumber'
 export type DocumentAnalysisProjectValueType = 'TEXT' | 'NUMBER' | 'DATE'
-export type DocumentAnalysisBomQuantityStatus = 'MATCHED' | 'SCHEDULE_ONLY' | 'DRAWING_ONLY' | 'CONFLICT' | 'UNKNOWN'
+export type DocumentAnalysisBomQuantityStatus = 'MATCHED' | 'SCHEDULE_ONLY' | 'DRAWING_ONLY' | 'LEGEND_ONLY' | 'CONFLICT' | 'UNKNOWN'
 export type DocumentAnalysisCatalogMatchStatus = 'NOT_EVALUATED' | 'MATCHED' | 'POSSIBLE' | 'NOT_FOUND'
 export type DocumentAnalysisCatalogEntityType = 'NONE' | 'DEVICE' | 'PART'
 export type DocumentAnalysisProjectBomMatchStatus = 'NOT_EVALUATED' | 'NOT_ON_BOM' | 'ALREADY_ON_BOM' | 'DUPLICATE_PROPOSAL'

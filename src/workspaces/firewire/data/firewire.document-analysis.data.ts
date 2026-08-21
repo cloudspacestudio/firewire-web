@@ -1671,6 +1671,12 @@ export class FirewireDocumentAnalysisData {
 
     private static createProjectContext(project: FirewireProjectRecord) {
         const customerInfo = project.worksheetData?.customerInfo || {}
+        const reportSettings = project.worksheetData?.reportSettings || {}
+        const reportLines = (value: unknown): string => (Array.isArray(value) ? value : [])
+            .filter((item: any) => item?.included !== false)
+            .map((item: any) => String(item?.label || item?.description || '').trim())
+            .filter(Boolean)
+            .join('\n')
         return {
             name: String(project.name || ''),
             projectNbr: String(project.projectNbr || ''),
@@ -1688,6 +1694,10 @@ export class FirewireDocumentAnalysisData {
                 billingEmail: String(customerInfo.billingEmail || ''),
                 billingPhone: String(customerInfo.billingPhone || ''),
                 contractOrPoNumber: String(customerInfo.contractOrPoNumber || '')
+            },
+            reportSettings: {
+                inclusions: reportLines(reportSettings.inclusions),
+                exclusions: reportLines(reportSettings.exclusions)
             }
         }
     }
@@ -1810,7 +1820,11 @@ export class FirewireDocumentAnalysisData {
             const customerField = targetField.slice('customerInfo.'.length) as keyof typeof context.customerInfo
             return String(context.customerInfo[customerField] || '')
         }
-        const value = context[targetField as keyof Omit<typeof context, 'customerInfo'>]
+        if (targetField.startsWith('reportSettings.')) {
+            const reportField = targetField.slice('reportSettings.'.length) as keyof typeof context.reportSettings
+            return String(context.reportSettings[reportField] || '')
+        }
+        const value = context[targetField as keyof Omit<typeof context, 'customerInfo' | 'reportSettings'>]
         return String(value ?? '')
     }
 
@@ -2058,6 +2072,20 @@ export class FirewireDocumentAnalysisData {
             input.worksheetData = input.worksheetData || {}
             input.worksheetData.customerInfo = input.worksheetData.customerInfo || {}
             input.worksheetData.customerInfo[customerField] = value
+            return
+        }
+        if (proposal.targetField === 'reportSettings.inclusions' || proposal.targetField === 'reportSettings.exclusions') {
+            const listKey = proposal.targetField.slice('reportSettings.'.length)
+            const proposedLines = value.split(/\r?\n|\s*;\s*/).map((line) => line.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)
+            input.worksheetData = input.worksheetData || {}
+            input.worksheetData.reportSettings = input.worksheetData.reportSettings || {}
+            input.worksheetData.reportSettings[listKey] = proposedLines.map((line, index) => ({
+                settingId: `analysis-${randomUUID()}`,
+                label: line,
+                description: '',
+                sortOrder: index * 10,
+                included: true
+            }))
             return
         }
         if (proposal.targetField === 'totalSqFt') {

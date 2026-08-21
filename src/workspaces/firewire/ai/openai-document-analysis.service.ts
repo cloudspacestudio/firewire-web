@@ -539,6 +539,9 @@ export class OpenAiDocumentAnalysisService {
             seen.add(proposal.targetField)
             const currentValue = this.getProjectContextValue(context, proposal.targetField)
             const proposedValue = String(proposal.proposedValue || '').trim()
+            if (this.isInvalidReportScopeProposal(proposal, result.proposedBomActions || [])) {
+                return actions
+            }
             if (!proposedValue || this.projectValuesEqual(proposal.targetField, proposal.valueType, currentValue, proposedValue)) {
                 return actions
             }
@@ -555,6 +558,29 @@ export class OpenAiDocumentAnalysisService {
                 proposedBomActions
             )
         }
+    }
+
+    private isInvalidReportScopeProposal(
+        proposal: DocumentAnalysisProjectDetailProposal,
+        bomProposals: DocumentAnalysisBomProposal[]
+    ): boolean {
+        if (proposal.targetField !== 'reportSettings.inclusions' && proposal.targetField !== 'reportSettings.exclusions') {
+            return false
+        }
+        const sourceArea = [proposal.source?.section, proposal.source?.location].join(' ').toLocaleLowerCase()
+        if (/\b(symbol|device|equipment)\s+(legend|schedule)|\bbom\b|bill of materials/.test(sourceArea)) {
+            return true
+        }
+        const lines = String(proposal.proposedValue || '').split(/\r?\n|\s*;\s*/)
+            .map((line) => this.normalizeMatchText(line.replace(/^[^a-zA-Z0-9]+/, '')))
+            .filter(Boolean)
+        if (lines.length < 2) return false
+        const deviceTerms = bomProposals.flatMap((item) => [
+            item.deviceType, item.description, item.partNumber, item.modelNumber
+        ]).map((value) => this.normalizeMatchText(value)).filter(Boolean)
+        const deviceLineCount = lines.filter((line) => deviceTerms.some((term) =>
+            term.length >= 4 && (line.includes(term) || term.includes(line)))).length
+        return deviceLineCount >= 2 && deviceLineCount / lines.length >= 0.5
     }
 
     private normalizeFloorplanProposals(
@@ -678,6 +704,10 @@ export class OpenAiDocumentAnalysisService {
         if (targetField.startsWith('customerInfo.')) {
             const customerField = targetField.slice('customerInfo.'.length) as keyof DocumentAnalysisProjectContext['customerInfo']
             return String(context.customerInfo[customerField] || '')
+        }
+        if (targetField.startsWith('reportSettings.')) {
+            const reportField = targetField.slice('reportSettings.'.length) as keyof DocumentAnalysisProjectContext['reportSettings']
+            return String(context.reportSettings[reportField] || '')
         }
         return String(context[targetField as keyof Omit<DocumentAnalysisProjectContext, 'customerInfo'>] ?? '')
     }
@@ -830,6 +860,12 @@ export class OpenAiDocumentAnalysisService {
             'Use only the targetField values defined by the schema. Return at most one proposal per targetField.',
             'Copy currentValue from the supplied project context and normalize proposedValue as plain text. Use digits only for NUMBER values when possible and ISO YYYY-MM-DD for DATE values when the complete date is known.',
             'Project type must be exactly Fire Alarm, Sprinkler, or Security. Only propose it when the document discipline clearly supports one of those values.',
+            'Treat project address as the construction/site location. Treat customerInfo as the paying client, owner, general contractor, or contracting business. Never copy the site name or site address into customerInfo unless the document explicitly identifies it as customer or billing information.',
+            'Look for customer and billing evidence in cover sheets, title blocks, proposals, contracts, purchase orders, distribution/contact blocks, and owner/architect/contractor information. Propose billingName, businessPointOfContactName, billingAddress, billingEmail, billingPhone, and contractOrPoNumber independently whenever explicitly supported.',
+            'Extract explicit contractual scope inclusions and exclusions into scope.inclusions and scope.exclusions. These are promised work, services, responsibilities, deliverables, boundaries, and expressly excluded work—not an equipment takeoff.',
+            'Never copy individual devices, parts, model numbers, quantities, equipment schedules, symbol legends, or BOM candidates into reportSettings.inclusions or reportSettings.exclusions. Those belong only in proposedBomActions. A document statement such as provide and install a complete fire alarm system may be one scope inclusion, but its panel, annunciator, detector, module, and notification-appliance list must remain BOM data.',
+            'Only propose reportSettings.inclusions and reportSettings.exclusions from explicit scope, contract, proposal, specification, responsibility, or exclusion language when supported items differ from the supplied project context. Use one complete contractual scope statement per line in proposedValue, preserve qualifiers, and do not turn assumptions into inclusions or exclusions.',
+            'Do not infer exclusions from omissions. Only extract an exclusion when the document expressly states excluded, by others, owner-furnished, not in contract, NIC, or equivalent responsibility language.',
             'Do not propose salesman, project status, difficulty, coordinates, code applicability, or any field that is not in the schema.',
             'A project-detail proposal must preserve evidenceType, confidence, rationale, and source provenance. Prefer DOCUMENT_FACT; make interpretations visibly AI_INTERPRETATION.',
             'proposedBomActions extracts device candidates and quantities for later human review. Do not claim a BOM row was created.',

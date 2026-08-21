@@ -42,7 +42,8 @@ const projectDetailProposalSchema = {
                 'scopeType', 'projectScope', 'totalSqFt', 'customerInfo.billingName',
                 'customerInfo.businessPointOfContactName', 'customerInfo.billingAddress',
                 'customerInfo.billingEmail', 'customerInfo.billingPhone',
-                'customerInfo.contractOrPoNumber'
+                'customerInfo.contractOrPoNumber', 'reportSettings.inclusions',
+                'reportSettings.exclusions'
             ]
         },
         fieldLabel: { type: 'string' },

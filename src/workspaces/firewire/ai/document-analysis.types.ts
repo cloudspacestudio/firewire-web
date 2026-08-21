@@ -17,6 +17,8 @@ export type DocumentAnalysisProjectField =
     | 'customerInfo.billingEmail'
     | 'customerInfo.billingPhone'
     | 'customerInfo.contractOrPoNumber'
+    | 'reportSettings.inclusions'
+    | 'reportSettings.exclusions'
 export type DocumentAnalysisProjectValueType = 'TEXT' | 'NUMBER' | 'DATE'
 export type DocumentAnalysisBomQuantityStatus = 'MATCHED' | 'SCHEDULE_ONLY' | 'DRAWING_ONLY' | 'LEGEND_ONLY' | 'CONFLICT' | 'UNKNOWN'
 export type DocumentAnalysisCatalogMatchStatus = 'NOT_EVALUATED' | 'MATCHED' | 'POSSIBLE' | 'NOT_FOUND'
@@ -167,6 +169,10 @@ export interface DocumentAnalysisProjectContext {
         billingEmail: string
         billingPhone: string
         contractOrPoNumber: string
+    }
+    reportSettings: {
+        inclusions: string
+        exclusions: string
     }
 }
 

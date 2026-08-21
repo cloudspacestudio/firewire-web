@@ -270,40 +270,68 @@ export class OpenAiDocumentAnalysisService {
             content.push({ type: 'input_text', text: `CROP ${tile.index}; full-image pixel bounds left=${tile.left}, top=${tile.top}, width=${tile.width}, height=${tile.height}.` })
             content.push({ type: 'input_image', image_url: `data:image/png;base64,${tile.buffer.toString('base64')}`, detail: 'high' })
         }
-        const response = await client.responses.create({
-            model: this.model,
-            store: false,
-            instructions: 'Perform exhaustive symbol localization. Return only schema-constrained JSON. Coordinates are local to each crop.',
-            input: [{ role: 'user', content }],
-            max_output_tokens: 16000,
-            text: { format: { type: 'json_schema', name: 'floorplan_tile_locations', strict: true, schema: {
+        const responseFormat: any = { type: 'json_schema', name: 'floorplan_tile_locations', strict: true, schema: {
                 type: 'object', additionalProperties: false,
                 properties: { placements: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
                     tileIndex: { type: 'integer' }, deviceName: { type: 'string' }, partNumber: { type: 'string' }, symbolLabel: { type: 'string' }, observedLabel: { type: 'string' },
                     xRatio: { type: 'number' }, yRatio: { type: 'number' }, confidence: { type: 'number' }, evidence: { type: 'string' }
                 }, required: ['tileIndex', 'deviceName', 'partNumber', 'symbolLabel', 'observedLabel', 'xRatio', 'yRatio', 'confidence', 'evidence'] } } },
                 required: ['placements']
-            } } }
+            } }
+        const runPass = async (passContent: any[], passName: string): Promise<FloorplanDiagnosticResult['symbolCandidates']> => {
+            const response = await client.responses.create({
+                model: this.model,
+                store: false,
+                instructions: 'Perform exhaustive symbol localization. Return only schema-constrained JSON. Coordinates are local to each crop.',
+                input: [{ role: 'user', content: passContent }],
+                max_output_tokens: 16000,
+                text: { format: responseFormat }
+            })
+            if (!response.output_text) return []
+            const parsed = JSON.parse(response.output_text) as { placements?: Array<any> }
+            return (parsed.placements || []).flatMap((placement) => {
+                const tile = tiles[Number(placement.tileIndex)]
+                if (!tile) return []
+                const normalizeLabel = (value: unknown) => String(value || '').toUpperCase().replace(/[^A-Z0-9]+/g, '')
+                const expectedLabel = normalizeLabel(placement.symbolLabel)
+                const observedLabel = normalizeLabel(placement.observedLabel)
+                if (['FACP', 'LCD', 'RPS'].includes(expectedLabel) && observedLabel !== expectedLabel) return []
+                return [{
+                    deviceName: String(placement.deviceName || ''),
+                    partNumber: String(placement.partNumber || ''),
+                    symbolLabel: String(placement.symbolLabel || ''),
+                    xRatio: Math.max(0, Math.min(1, (tile.left + (Number(placement.xRatio || 0) * tile.width)) / width)),
+                    yRatio: Math.max(0, Math.min(1, (tile.top + (Number(placement.yRatio || 0) * tile.height)) / height)),
+                    confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0))),
+                    evidence: `${passName} crop ${tile.index}; observed ${observedLabel || 'unlabeled symbol'}: ${String(placement.evidence || '')}`
+                }]
+            })
+        }
+
+        const firstPass = this.mergeDiagnosticSymbolCandidates([], await runPass(content, 'Focused'))
+        const normalizeIdentity = (value: unknown) => String(value || '').toUpperCase().replace(/[^A-Z0-9]+/g, '')
+        const deficits = input.bomDevices.flatMap((device) => {
+            const identity = normalizeIdentity(device.partNumber) || normalizeIdentity(device.symbolLabel)
+            const found = firstPass.filter((candidate) => (normalizeIdentity(candidate.partNumber) || normalizeIdentity(candidate.symbolLabel)) === identity).length
+            const missing = Math.max(0, Number(device.quantity || 0) - found)
+            return missing > 0 ? [{ ...device, found, missing }] : []
         })
-        if (!response.output_text) return []
-        const parsed = JSON.parse(response.output_text) as { placements?: Array<any> }
-        return (parsed.placements || []).flatMap((placement) => {
-            const tile = tiles[Number(placement.tileIndex)]
-            if (!tile) return []
-            const normalizeLabel = (value: unknown) => String(value || '').toUpperCase().replace(/[^A-Z0-9]+/g, '')
-            const expectedLabel = normalizeLabel(placement.symbolLabel)
-            const observedLabel = normalizeLabel(placement.observedLabel)
-            if (['FACP', 'LCD', 'RPS'].includes(expectedLabel) && observedLabel !== expectedLabel) return []
-            return [{
-                deviceName: String(placement.deviceName || ''),
-                partNumber: String(placement.partNumber || ''),
-                symbolLabel: String(placement.symbolLabel || ''),
-                xRatio: Math.max(0, Math.min(1, (tile.left + (Number(placement.xRatio || 0) * tile.width)) / width)),
-                yRatio: Math.max(0, Math.min(1, (tile.top + (Number(placement.yRatio || 0) * tile.height)) / height)),
-                confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0))),
-                evidence: `Focused crop ${tile.index}; observed ${observedLabel || 'unlabeled symbol'}: ${String(placement.evidence || '')}`
-            }]
-        })
+        if (deficits.length === 0) return firstPass
+
+        const recoveryContent: any[] = [{
+            type: 'input_text',
+            text: [
+                'RECOVERY PASS: independently look again for symbols missed by the first scan.',
+                `DEFICITS: ${JSON.stringify(deficits)}`,
+                `ALREADY_FOUND_FULL_IMAGE_COORDINATES: ${JSON.stringify(firstPass.map((item) => ({ partNumber: item.partNumber, symbolLabel: item.symbolLabel, xRatio: item.xRatio, yRatio: item.yRatio })))}`,
+                'Do not repeat an already-found coordinate. Search blank-looking corridors, large open rooms, perimeter runs, and crop edges carefully.',
+                'Distinguish notification appliances by their actual legend glyph: a plain strobe is STR; a horn/strobe is H. Nearby candela and address text is not the symbol.',
+                'Return only additional real devices. Expected quantity is a search target, never permission to invent a mark.',
+                `BOM: ${JSON.stringify(input.bomDevices)}`
+            ].join('\n')
+        }, ...content.slice(1)]
+        const recoveryPass = await runPass(recoveryContent, 'Recovery')
+        return this.mergeDiagnosticSymbolCandidates(firstPass, recoveryPass)
     }
 
     private mergeDiagnosticSymbolCandidates(primary: FloorplanDiagnosticResult['symbolCandidates'], focused: FloorplanDiagnosticResult['symbolCandidates']): FloorplanDiagnosticResult['symbolCandidates'] {

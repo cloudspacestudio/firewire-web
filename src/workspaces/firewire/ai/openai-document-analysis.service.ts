@@ -1,6 +1,7 @@
 import Ajv, { ValidateFunction } from 'ajv'
 import OpenAI, { APIError, toFile } from 'openai'
 import { PDFDocument } from 'pdf-lib'
+import sharp from 'sharp'
 
 import { documentInspectionJsonSchema, floorplanSymbolLocationJsonSchema } from './document-analysis.schema'
 import {
@@ -46,6 +47,28 @@ export interface InspectDocumentOutput {
 export interface OpenAiFileCleanupResult {
     deletedFileIds: string[]
     missingFileIds: string[]
+}
+
+export interface AnalyzeFloorplanDiagnosticInput {
+    buffer: Buffer
+    filename: string
+    mimeType: string
+    bomDevices: Array<{ deviceName: string, partNumber: string, symbolLabel: string, quantity: number }>
+}
+
+export interface FloorplanDiagnosticResult {
+    summary: string
+    drawingType: string
+    rotationDegrees: number
+    legend: {
+        found: boolean
+        location: string
+        items: Array<{ deviceName: string, partNumber: string, symbolLabel: string, description: string }>
+    }
+    bomComparisons: Array<{ deviceName: string, partNumber: string, symbolLabel: string, expectedQuantity: number, visibleCandidateCount: number, notes: string }>
+    symbolCandidates: Array<{ deviceName: string, partNumber: string, symbolLabel: string, xRatio: number, yRatio: number, confidence: number, evidence: string }>
+    scaleCandidates: Array<{ printedScale: string, rulerLabel: string, startXRatio: number, startYRatio: number, endXRatio: number, endYRatio: number, realWorldFeet: number, confidence: number, evidence: string }>
+    warnings: string[]
 }
 
 export interface LocateFloorplanSymbolsInput {
@@ -105,6 +128,196 @@ export class OpenAiDocumentAnalysisService {
 
     getConfiguredModel(): string {
         return this.model
+    }
+
+    async analyzeFloorplanDiagnostic(input: AnalyzeFloorplanDiagnosticInput): Promise<FloorplanDiagnosticResult> {
+        this.validateConfiguration()
+        if (!input.buffer.length) throw new DocumentAnalysisInputError('The floorplan has no readable content.', 400)
+        const client = new OpenAI({ apiKey: this.apiKey, timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000) })
+        let uploadedFileId = ''
+        try {
+            const isImage = String(input.mimeType || '').toLowerCase().startsWith('image/')
+            const mediaContent: any = isImage
+                ? { type: 'input_image', image_url: `data:${input.mimeType};base64,${input.buffer.toString('base64')}`, detail: 'high' }
+                : await (async() => {
+                    const uploaded = await client.files.create({
+                        file: await toFile(input.buffer, input.filename, { type: input.mimeType || 'application/pdf' }),
+                        purpose: 'user_data',
+                        expires_after: { anchor: 'created_at', seconds: 24 * 60 * 60 }
+                    })
+                    uploadedFileId = uploaded.id
+                    return { type: 'input_file', file_id: uploaded.id, detail: 'high' }
+                })()
+            const focusedLocationsPromise = isImage
+                ? this.locateDiagnosticSymbolsInTiles(client, input).catch((error) => {
+                    console.error('Focused diagnostic tile scan failed.', error)
+                    return [] as FloorplanDiagnosticResult['symbolCandidates']
+                })
+                : Promise.resolve([] as FloorplanDiagnosticResult['symbolCandidates'])
+            const response = await client.responses.create({
+                model: this.model,
+                store: false,
+                instructions: [
+                    'Inspect one construction floorplan for diagnostic purposes. Do not claim that any project data was changed.',
+                    'The supplied image is the canonical raster used by the floorplan designer. Its complete pixel rectangle is the only coordinate system.',
+                    'Use xRatio and yRatio from 0 to 1 across the complete supplied image, measured from its top-left corner. Do not compensate for DPI, printed page size, zoom, margins, or an imagined crop.',
+                    'Separate actual plan placements from examples in legends, schedules, details, title blocks, and scale graphics.',
+                    'Scan the actual plan area systematically from top-left to bottom-right in a grid. Report every visible instance of a supported BOM or legend symbol, not merely one representative example of each type.',
+                    'Compare visible symbols to the supplied BOM devices, report uncertainty, and do not invent a location. Put the coordinate at the visual center of the symbol graphic, not its label or device-address text.',
+                    'Inspect legends row by row and report printed symbol labels, device names, and part numbers when legible.',
+                    'Look for printed architectural/engineering scales and graphic scale rulers. For a readable graphic ruler or dimension line, return the exact two endpoints and its realWorldFeet. Endpoints must be normalized across the full source page. Use zeros when endpoints or length cannot be read; do not infer them.',
+                    'Return only the schema-constrained JSON result.'
+                ].join('\n'),
+                input: [{ role: 'user', content: [mediaContent, {
+                    type: 'input_text',
+                    text: `Analyze ${JSON.stringify(input.filename)}. CURRENT_BOM_DEVICES\n${JSON.stringify(input.bomDevices)}\nEND_CURRENT_BOM_DEVICES`
+                }] }],
+                max_output_tokens: 12000,
+                text: { format: { type: 'json_schema', name: 'floorplan_diagnostic', strict: true, schema: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                        summary: { type: 'string' }, drawingType: { type: 'string' }, rotationDegrees: { type: 'integer' },
+                        legend: { type: 'object', additionalProperties: false, properties: {
+                            found: { type: 'boolean' }, location: { type: 'string' }, items: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+                                deviceName: { type: 'string' }, partNumber: { type: 'string' }, symbolLabel: { type: 'string' }, description: { type: 'string' }
+                            }, required: ['deviceName', 'partNumber', 'symbolLabel', 'description'] } }
+                        }, required: ['found', 'location', 'items'] },
+                        bomComparisons: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+                            deviceName: { type: 'string' }, partNumber: { type: 'string' }, symbolLabel: { type: 'string' }, expectedQuantity: { type: 'integer' }, visibleCandidateCount: { type: 'integer' }, notes: { type: 'string' }
+                        }, required: ['deviceName', 'partNumber', 'symbolLabel', 'expectedQuantity', 'visibleCandidateCount', 'notes'] } },
+                        symbolCandidates: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+                            deviceName: { type: 'string' }, partNumber: { type: 'string' }, symbolLabel: { type: 'string' }, xRatio: { type: 'number' }, yRatio: { type: 'number' }, confidence: { type: 'number' }, evidence: { type: 'string' }
+                        }, required: ['deviceName', 'partNumber', 'symbolLabel', 'xRatio', 'yRatio', 'confidence', 'evidence'] } },
+                        scaleCandidates: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+                            printedScale: { type: 'string' }, rulerLabel: { type: 'string' }, startXRatio: { type: 'number' }, startYRatio: { type: 'number' }, endXRatio: { type: 'number' }, endYRatio: { type: 'number' }, realWorldFeet: { type: 'number' }, confidence: { type: 'number' }, evidence: { type: 'string' }
+                        }, required: ['printedScale', 'rulerLabel', 'startXRatio', 'startYRatio', 'endXRatio', 'endYRatio', 'realWorldFeet', 'confidence', 'evidence'] } },
+                        warnings: { type: 'array', items: { type: 'string' } }
+                    }, required: ['summary', 'drawingType', 'rotationDegrees', 'legend', 'bomComparisons', 'symbolCandidates', 'scaleCandidates', 'warnings']
+                } } }
+            })
+            if (!response.output_text) throw new Error('OpenAI returned no floorplan diagnostic output.')
+            const result = JSON.parse(response.output_text) as FloorplanDiagnosticResult
+            const focusedLocations = await focusedLocationsPromise
+            const contextualCandidates = focusedLocations.length > 0
+                ? result.symbolCandidates.map((candidate) => ({
+                    ...candidate,
+                    confidence: Math.min(0.69, candidate.confidence),
+                    evidence: `Full-sheet contextual candidate; requires focused confirmation. ${candidate.evidence}`
+                }))
+                : result.symbolCandidates
+            result.symbolCandidates = this.mergeDiagnosticSymbolCandidates(contextualCandidates, focusedLocations)
+            if (focusedLocations.length > 0) {
+                result.summary = `${result.summary} A focused overlapping-tile scan supplied ${focusedLocations.length} pixel-localized symbol candidates.`
+            }
+            return result
+        } catch (error) {
+            throw this.toProviderError(error)
+        } finally {
+            if (uploadedFileId) {
+                try { await client.files.delete(uploadedFileId) } catch (error) { console.error('Floorplan diagnostic file cleanup failed.', error) }
+            }
+        }
+    }
+
+    private async locateDiagnosticSymbolsInTiles(client: OpenAI, input: AnalyzeFloorplanDiagnosticInput): Promise<FloorplanDiagnosticResult['symbolCandidates']> {
+        const image = sharp(input.buffer, { failOn: 'none' })
+        const metadata = await image.metadata()
+        const width = Number(metadata.width || 0)
+        const height = Number(metadata.height || 0)
+        if (width < 400 || height < 400) return []
+
+        const columns = 3
+        const rows = 3
+        const overlap = 0.12
+        const tiles: Array<{ index: number, left: number, top: number, width: number, height: number, buffer: Buffer }> = []
+        for (let row = 0; row < rows; row += 1) {
+            for (let column = 0; column < columns; column += 1) {
+                const nominalLeft = column / columns
+                const nominalRight = (column + 1) / columns
+                const nominalTop = row / rows
+                const nominalBottom = (row + 1) / rows
+                const leftRatio = Math.max(0, nominalLeft - (column > 0 ? overlap / columns : 0))
+                const rightRatio = Math.min(1, nominalRight + (column < columns - 1 ? overlap / columns : 0))
+                const topRatio = Math.max(0, nominalTop - (row > 0 ? overlap / rows : 0))
+                const bottomRatio = Math.min(1, nominalBottom + (row < rows - 1 ? overlap / rows : 0))
+                const left = Math.floor(leftRatio * width)
+                const top = Math.floor(topRatio * height)
+                const tileWidth = Math.max(1, Math.ceil(rightRatio * width) - left)
+                const tileHeight = Math.max(1, Math.ceil(bottomRatio * height) - top)
+                tiles.push({
+                    index: tiles.length,
+                    left,
+                    top,
+                    width: tileWidth,
+                    height: tileHeight,
+                    buffer: await sharp(input.buffer, { failOn: 'none' }).extract({ left, top, width: tileWidth, height: tileHeight }).png().toBuffer()
+                })
+            }
+        }
+
+        const content: any[] = [{
+            type: 'input_text',
+            text: [
+                'Locate every actual fire-alarm device symbol in each numbered crop.',
+                'Crops overlap. Report coordinates local to the stated crop from 0 to 1, at the exact center of the symbol graphic.',
+                'Exclude legends, schedules, title blocks, example symbols, wire keys, room labels, circuit text, candela text, and device-address text.',
+                'Use the supplied BOM identities. Do not use a nearby glyph as a substitute for a requested device.',
+                'Prefix collisions require exact reading: F is not FACP and P is not RPS. For text-designated equipment labels FACP, LCD, and RPS, observedLabel must contain the complete visibly printed label. For graphical appliance symbols such as STR or HWP, report the actual visible glyph or shape description. Never expand a one-character glyph into a longer equipment label.',
+                `BOM: ${JSON.stringify(input.bomDevices)}`
+            ].join('\n')
+        }]
+        for (const tile of tiles) {
+            content.push({ type: 'input_text', text: `CROP ${tile.index}; full-image pixel bounds left=${tile.left}, top=${tile.top}, width=${tile.width}, height=${tile.height}.` })
+            content.push({ type: 'input_image', image_url: `data:image/png;base64,${tile.buffer.toString('base64')}`, detail: 'high' })
+        }
+        const response = await client.responses.create({
+            model: this.model,
+            store: false,
+            instructions: 'Perform exhaustive symbol localization. Return only schema-constrained JSON. Coordinates are local to each crop.',
+            input: [{ role: 'user', content }],
+            max_output_tokens: 16000,
+            text: { format: { type: 'json_schema', name: 'floorplan_tile_locations', strict: true, schema: {
+                type: 'object', additionalProperties: false,
+                properties: { placements: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+                    tileIndex: { type: 'integer' }, deviceName: { type: 'string' }, partNumber: { type: 'string' }, symbolLabel: { type: 'string' }, observedLabel: { type: 'string' },
+                    xRatio: { type: 'number' }, yRatio: { type: 'number' }, confidence: { type: 'number' }, evidence: { type: 'string' }
+                }, required: ['tileIndex', 'deviceName', 'partNumber', 'symbolLabel', 'observedLabel', 'xRatio', 'yRatio', 'confidence', 'evidence'] } } },
+                required: ['placements']
+            } } }
+        })
+        if (!response.output_text) return []
+        const parsed = JSON.parse(response.output_text) as { placements?: Array<any> }
+        return (parsed.placements || []).flatMap((placement) => {
+            const tile = tiles[Number(placement.tileIndex)]
+            if (!tile) return []
+            const normalizeLabel = (value: unknown) => String(value || '').toUpperCase().replace(/[^A-Z0-9]+/g, '')
+            const expectedLabel = normalizeLabel(placement.symbolLabel)
+            const observedLabel = normalizeLabel(placement.observedLabel)
+            if (['FACP', 'LCD', 'RPS'].includes(expectedLabel) && observedLabel !== expectedLabel) return []
+            return [{
+                deviceName: String(placement.deviceName || ''),
+                partNumber: String(placement.partNumber || ''),
+                symbolLabel: String(placement.symbolLabel || ''),
+                xRatio: Math.max(0, Math.min(1, (tile.left + (Number(placement.xRatio || 0) * tile.width)) / width)),
+                yRatio: Math.max(0, Math.min(1, (tile.top + (Number(placement.yRatio || 0) * tile.height)) / height)),
+                confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0))),
+                evidence: `Focused crop ${tile.index}; observed ${observedLabel || 'unlabeled symbol'}: ${String(placement.evidence || '')}`
+            }]
+        })
+    }
+
+    private mergeDiagnosticSymbolCandidates(primary: FloorplanDiagnosticResult['symbolCandidates'], focused: FloorplanDiagnosticResult['symbolCandidates']): FloorplanDiagnosticResult['symbolCandidates'] {
+        const normalize = (value: unknown) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+        const accepted: FloorplanDiagnosticResult['symbolCandidates'] = []
+        for (const candidate of [...focused, ...primary].sort((left, right) => right.confidence - left.confidence)) {
+            const identity = normalize(candidate.partNumber) || normalize(candidate.symbolLabel) || normalize(candidate.deviceName)
+            const duplicate = accepted.some((existing) => {
+                const existingIdentity = normalize(existing.partNumber) || normalize(existing.symbolLabel) || normalize(existing.deviceName)
+                return identity === existingIdentity && Math.hypot(candidate.xRatio - existing.xRatio, candidate.yRatio - existing.yRatio) < 0.012
+            })
+            if (!duplicate) accepted.push(candidate)
+        }
+        return accepted.sort((left, right) => left.yRatio - right.yRatio || left.xRatio - right.xRatio)
     }
 
     async locateFloorplanSymbols(input: LocateFloorplanSymbolsInput): Promise<DocumentAnalysisFloorplanSymbolPlacement[]> {

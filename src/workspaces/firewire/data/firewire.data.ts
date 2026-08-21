@@ -7,6 +7,7 @@ import { Vendor } from '../../fieldwire/repository/vendor'
 import { VwPart } from '../../fieldwire/repository/vwpart'
 import { Part } from '../../fieldwire/repository/part'
 import { AzureBlobDocumentStorage } from './azure-blob-document-storage'
+import { OpenAiDocumentAnalysisService } from '../ai/openai-document-analysis.service'
 
 const uploadToMemory = multer({
     storage: multer.memoryStorage(),
@@ -27,6 +28,11 @@ const uploadDocLibraryFileToMemory = multer({
     limits: {
         fileSize: Number(process.env.FIREWIRE_DOC_LIBRARY_MAX_FILE_BYTES || 250 * 1024 * 1024)
     }
+}).single('file')
+
+const uploadFloorplanAnalysisToMemory = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: Number(process.env.OPENAI_FLOORPLAN_MAX_BYTES || 50 * 1024 * 1024) }
 }).single('file')
 
 interface VendorImportConfig {
@@ -147,6 +153,35 @@ interface DeviceTagRecord {
 export class FirewireData {
 
     static manifestItems = [
+        {
+            method: 'post',
+            path: '/api/firewire/floorplan-analysis/diagnostic',
+            fx: async (req: express.Request, res: express.Response) => {
+                uploadFloorplanAnalysisToMemory(req, res, async(error) => {
+                    try {
+                        if (error) return res.status(400).json({ message: error.message || String(error) })
+                        if (!req.file?.buffer?.length) return res.status(400).json({ message: 'A floorplan file is required.' })
+                        let bomDevices: any[] = []
+                        try { bomDevices = JSON.parse(String(req.body?.bomDevices || '[]')) } catch {}
+                        const normalizedBom = (Array.isArray(bomDevices) ? bomDevices : []).map((item) => ({
+                            deviceName: String(item?.deviceName || ''),
+                            partNumber: String(item?.partNumber || ''),
+                            symbolLabel: String(item?.symbolLabel || ''),
+                            quantity: Math.max(0, Math.floor(Number(item?.quantity || 0)))
+                        }))
+                        const data = await new OpenAiDocumentAnalysisService().analyzeFloorplanDiagnostic({
+                            buffer: req.file.buffer,
+                            filename: req.file.originalname || 'floorplan',
+                            mimeType: req.file.mimetype || 'application/pdf',
+                            bomDevices: normalizedBom
+                        })
+                        return res.status(200).json({ data })
+                    } catch (analysisError: any) {
+                        return res.status(Number(analysisError?.statusCode || 500)).json({ message: analysisError?.message || String(analysisError) })
+                    }
+                })
+            }
+        },
         {
             method: 'get',
             path: '/api/firewire/storage/design-train-ai',

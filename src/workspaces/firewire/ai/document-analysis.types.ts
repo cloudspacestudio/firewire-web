@@ -101,6 +101,18 @@ export interface DocumentAnalysisBomProposal {
     confidence: number
     scheduleSource: DocumentAnalysisSource
     drawingSource: DocumentAnalysisSource
+    legendSymbol: {
+        found: boolean
+        pageNumber: number
+        xRatio: number
+        yRatio: number
+        widthRatio: number
+        heightRatio: number
+        confidence: number
+        source: DocumentAnalysisSource
+        previewDataUrl?: string
+        previewError?: string
+    }
     catalogMatch: {
         status: DocumentAnalysisCatalogMatchStatus
         entityType: DocumentAnalysisCatalogEntityType
@@ -219,6 +231,8 @@ export interface DocumentAnalysisDeviceCreationApplication {
     categoryName: string
     includeOnFloorplan: boolean
     floorplanLabelText: string
+    iconId?: string
+    iconLabel?: string
 }
 
 export interface DocumentAnalysisFloorplanApplication {

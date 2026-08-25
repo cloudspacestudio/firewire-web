@@ -45,6 +45,8 @@ export interface ISqlServerConfig {
     database: string
     options?: any
     driver?: string
+    connectionTimeout?: number
+    requestTimeout?: number
 }
 export interface ISqlServerConfigOptions {
     trustedConnection: boolean

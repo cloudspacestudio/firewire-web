@@ -91,10 +91,14 @@ export class Bootstrap {
                 // #region Sql Server DB Setup
                 if (process.env.SQLSRV) {
                     console.log(`miSSion.webserver: discovered sql server env`)
+                    const configuredConnectionTimeout = Number(process.env.SQL_CONNECTION_TIMEOUT_MS || 30000)
+                    const configuredRequestTimeout = Number(process.env.SQL_REQUEST_TIMEOUT_MS || 120000)
                     const sqlConfig: ISqlServerConfig = {
                         server: process.env.SQLSRV,
                         database: process.env.SQLDB||'',
-                        driver: 'msnodesqlv8'
+                        driver: 'msnodesqlv8',
+                        connectionTimeout: Number.isFinite(configuredConnectionTimeout) ? Math.max(15000, configuredConnectionTimeout) : 30000,
+                        requestTimeout: Number.isFinite(configuredRequestTimeout) ? Math.max(15000, configuredRequestTimeout) : 120000
                     }
                     if (process.env.SQLUSER) {
                         sqlConfig.user = process.env.SQLUSER

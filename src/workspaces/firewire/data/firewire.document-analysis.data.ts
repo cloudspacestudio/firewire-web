@@ -777,6 +777,51 @@ export class FirewireDocumentAnalysisData {
                         throw new Error('The device was created but could not be reloaded.')
                     }
 
+                    let iconId = String(device.iconId || '').trim()
+                    let iconLabel = String(device.iconLabel || '').trim()
+                    if (proposal.legendSymbol?.found) {
+                        if (!/\.pdf$/i.test(context.sourceFilename) && String(context.version.mimeType || '').toLowerCase() !== 'application/pdf') {
+                            throw new DocumentAnalysisInputError('Legend glyph creation currently requires a PDF source document.', 409)
+                        }
+                        const previewDataUrl = String(proposal.legendSymbol.previewDataUrl || '').trim()
+                        const getDataUrl = async() => previewDataUrl || await new OpenAiDocumentAnalysisService().createLegendSymbolIconDataUrl(
+                            (await FirewireDocumentAnalysisData.loadVersionContent(context.workspaceKey, context.version)).buffer,
+                            proposal.legendSymbol
+                        )
+                        if (!iconId) {
+                            const dataUrl = await getDataUrl()
+                            const iconGroupId = await context.sqldb.getOrCreateDeviceIconGroup('AI Inspection Legends')
+                            iconLabel = FirewireDocumentAnalysisData.getLegendIconLabel(proposal, name)
+                            iconId = await context.sqldb.createDeviceIcon({
+                                iconGroupId,
+                                label: iconLabel,
+                                fileName: `inspection-legend-${proposalId}.png`,
+                                mimeType: 'image/png',
+                                dataUrl
+                            })
+                            await context.sqldb.assignDeviceIcon(String(device.deviceId), iconId, FirewireDocumentAnalysisData.resolveUserId(req))
+                            device = await context.sqldb.getDevice(String(device.deviceId)) || device
+                        } else if (previewDataUrl) {
+                            // A new explicit resolution may repair artwork created by an older
+                            // AI inspection, but it must never overwrite a manually selected icon.
+                            const iconGroups = await context.sqldb.getDeviceIconGroups()
+                            const aiIcon = iconGroups
+                                .find((group: any) => String(group.name || '').trim().toLocaleLowerCase() === 'ai inspection legends')
+                                ?.icons?.find((icon: any) => String(icon.iconId || '') === iconId)
+                            if (aiIcon) {
+                                iconLabel = FirewireDocumentAnalysisData.getLegendIconLabel(proposal, name)
+                                await context.sqldb.updateDeviceIcon({
+                                    iconId,
+                                    label: iconLabel,
+                                    fileName: `inspection-legend-${proposalId}.png`,
+                                    mimeType: 'image/png',
+                                    dataUrl: await getDataUrl()
+                                })
+                                device = await context.sqldb.getDevice(String(device.deviceId)) || device
+                            }
+                        }
+                    }
+
                     const deviceMatchedProposal: DocumentAnalysisBomProposal = {
                         ...proposal,
                         catalogMatch: {
@@ -812,7 +857,9 @@ export class FirewireDocumentAnalysisData {
                         shortName: String(device.shortName || shortName),
                         categoryName: String(device.categoryName || categoryName),
                         includeOnFloorplan: !!device.includeOnFloorplan,
-                        floorplanLabelText: String(device.floorplanLabelText || floorplanLabelText)
+                        floorplanLabelText: String(device.floorplanLabelText || floorplanLabelText),
+                        iconId: String(device.iconId || iconId || '').trim() || undefined,
+                        iconLabel: String(device.iconLabel || iconLabel || '').trim() || undefined
                     }
                     const updatedRecord: DocumentAnalysisRecord = {
                         ...record,
@@ -2020,6 +2067,13 @@ export class FirewireDocumentAnalysisData {
         const installationRate = Number(installation?.effectiveRate || installation?.payRate || defaultHourlyRate)
         const normalizedBaseline = Number.isFinite(baselineCost) ? baselineCost : defaultHourlyRate * 2
         return FirewireDocumentAnalysisData.roundBomMoney((normalizedBaseline / defaultHourlyRate) * installationRate)
+    }
+
+    private static getLegendIconLabel(proposal: DocumentAnalysisBomProposal, fallbackName: string): string {
+        return [proposal.symbolLabel, proposal.deviceType, fallbackName]
+            .map((value) => String(value || '').replace(/\s+/g, ' ').trim())
+            .find(Boolean)
+            ?.slice(0, 200) || 'Inspection legend symbol'
     }
 
     private static roundBomMoney(value: unknown): number {

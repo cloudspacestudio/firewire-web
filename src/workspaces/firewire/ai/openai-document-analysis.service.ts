@@ -2,6 +2,7 @@ import Ajv, { ValidateFunction } from 'ajv'
 import OpenAI, { APIError, toFile } from 'openai'
 import { PDFDocument } from 'pdf-lib'
 import sharp from 'sharp'
+import { DOMMatrix, ImageData, Path2D } from '@napi-rs/canvas'
 
 import { documentInspectionJsonSchema, floorplanSymbolLocationJsonSchema } from './document-analysis.schema'
 import {
@@ -128,6 +129,62 @@ export class OpenAiDocumentAnalysisService {
 
     getConfiguredModel(): string {
         return this.model
+    }
+
+    async createLegendSymbolIconDataUrl(
+        buffer: Buffer,
+        legendSymbol: DocumentAnalysisBomProposal['legendSymbol']
+    ): Promise<string> {
+        if (!legendSymbol?.found || legendSymbol.pageNumber < 1) {
+            throw new DocumentAnalysisInputError('The inspection did not capture usable legend artwork for this device.', 409)
+        }
+
+        const sourcePdf = await PDFDocument.load(buffer)
+        if (legendSymbol.pageNumber > sourcePdf.getPageCount()) {
+            throw new DocumentAnalysisInputError('The inspected legend page no longer exists in the source document.', 409)
+        }
+        const paddingX = Math.max(0.004, legendSymbol.widthRatio * 0.2)
+        const paddingY = Math.max(0.004, legendSymbol.heightRatio * 0.2)
+        const renderedPage = await this.renderPdfPageToPng(buffer, legendSymbol.pageNumber, 6000)
+        const cropRegion = {
+            xStartRatio: Math.max(0, legendSymbol.xRatio - paddingX),
+            yStartRatio: Math.max(0, legendSymbol.yRatio - paddingY),
+            widthRatio: Math.min(1, legendSymbol.xRatio + legendSymbol.widthRatio + paddingX)
+                - Math.max(0, legendSymbol.xRatio - paddingX),
+            heightRatio: Math.min(1, legendSymbol.yRatio + legendSymbol.heightRatio + paddingY)
+                - Math.max(0, legendSymbol.yRatio - paddingY)
+        }
+        const renderedCrop = await this.cropImageRegion(renderedPage, cropRegion)
+        const cleanedCrop = await this.removeDisconnectedLegendGridLines(renderedCrop, {
+            xStartRatio: (legendSymbol.xRatio - cropRegion.xStartRatio) / cropRegion.widthRatio,
+            yStartRatio: (legendSymbol.yRatio - cropRegion.yStartRatio) / cropRegion.heightRatio,
+            widthRatio: legendSymbol.widthRatio / cropRegion.widthRatio,
+            heightRatio: legendSymbol.heightRatio / cropRegion.heightRatio
+        })
+        return this.createMaskedIconDataUrl(cleanedCrop)
+    }
+
+    private async createMaskedIconDataUrl(renderedCrop: Buffer): Promise<string> {
+        const { data, info } = await sharp(renderedCrop)
+            .flatten({ background: '#ffffff' })
+            .grayscale()
+            .raw()
+            .toBuffer({ resolveWithObject: true })
+        const rgba = Buffer.alloc(info.width * info.height * 4)
+        for (let index = 0; index < data.length; index += 1) {
+            const alpha = Math.max(0, Math.min(255, Math.round((245 - data[index]) * 1.35)))
+            const offset = index * 4
+            rgba[offset] = 255
+            rgba[offset + 1] = 255
+            rgba[offset + 2] = 255
+            rgba[offset + 3] = alpha < 18 ? 0 : alpha
+        }
+        const icon = await sharp(rgba, { raw: { width: info.width, height: info.height, channels: 4 } })
+            .trim({ background: { r: 255, g: 255, b: 255, alpha: 0 } })
+            .resize(256, 256, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
+            .png()
+            .toBuffer()
+        return `data:image/png;base64,${icon.toString('base64')}`
     }
 
     async analyzeFloorplanDiagnostic(input: AnalyzeFloorplanDiagnosticInput): Promise<FloorplanDiagnosticResult> {
@@ -683,7 +740,9 @@ export class OpenAiDocumentAnalysisService {
                 throw new Error(`OpenAI document inspection failed application schema validation: ${details || 'unknown validation error'}`)
             }
 
-            inspectionResult = this.normalizeProjectActions(parsed, input.projectContext)
+            const normalizedResult = this.normalizeProjectActions(parsed, input.projectContext)
+            await this.reportProgress(input, 'locating-legend-symbols', 'Structured findings validated. Locating exact legend glyph artwork.', 90)
+            inspectionResult = await this.enrichLegendSymbols(client, normalizedResult, input)
             openAiResponseId = response.id
             openAiRequestId = String((response as any)._request_id || '')
             await this.reportProgress(input, 'finalizing', 'Structured findings validated. Finalizing the inspection.', 95)
@@ -799,6 +858,544 @@ export class OpenAiDocumentAnalysisService {
                 proposedBomActions
             )
         }
+    }
+
+    private async enrichLegendSymbols(
+        client: OpenAI,
+        result: DocumentInspectionResult,
+        input: InspectDocumentInput
+    ): Promise<DocumentInspectionResult> {
+        const isPdf = /\.pdf$/i.test(input.filename) || String(input.mimeType || '').toLowerCase() === 'application/pdf'
+        const candidates = (result.proposedBomActions || []).map((proposal) => ({
+            proposalId: proposal.proposalId,
+            deviceType: proposal.deviceType,
+            symbolLabel: proposal.symbolLabel,
+            manufacturer: proposal.manufacturer,
+            modelNumber: proposal.modelNumber,
+            partNumber: proposal.partNumber,
+            description: proposal.description,
+            sourcePages: [proposal.scheduleSource?.page || '', proposal.drawingSource?.page || ''].filter(Boolean)
+        }))
+        if (!isPdf || candidates.length === 0) {
+            return result
+        }
+
+        const citedPages = [...new Set(candidates
+            .flatMap((candidate) => candidate.sourcePages.flatMap((page) => String(page || '').match(/\d+/g) || []))
+            .map((value) => Math.floor(Number(value)))
+            .filter((value) => value > 0))]
+        const fallbackPages = (result.proposedFloorplanActions || [])
+            .map((proposal) => Math.floor(Number(proposal.pageNumber || 0)))
+            .filter((value) => value > 0)
+        let legendRegions: Array<{
+            cropId: string
+            pageNumber: number
+            xStartRatio: number
+            yStartRatio: number
+            widthRatio: number
+            heightRatio: number
+        }>
+        try {
+            legendRegions = await this.createLegendLocalizationRegions(
+                input.buffer,
+                [...new Set([1, ...citedPages, ...fallbackPages])].slice(0, 12)
+            )
+        } catch (error) {
+            console.error('[document-inspection] Legend page extraction failed; preserving whole-document findings.', {
+                projectId: input.projectId,
+                documentId: input.documentId,
+                message: error instanceof Error ? error.message : String(error || '')
+            })
+            return result
+        }
+        if (legendRegions.length === 0) {
+            return result
+        }
+
+        const sourceProperties = {
+            filename: { type: 'string' },
+            page: { type: 'string' },
+            section: { type: 'string' },
+            location: { type: 'string' }
+        }
+        try {
+            const pageImages: Array<{
+                cropId: string
+                pageNumber: number
+                imageBuffer: Buffer
+                xStartRatio: number
+                yStartRatio: number
+                widthRatio: number
+                heightRatio: number
+            }> = []
+            const renderedPages = new Map<number, Buffer>()
+            for (const region of legendRegions) {
+                let renderedPage = renderedPages.get(region.pageNumber)
+                if (!renderedPage) {
+                    renderedPage = await this.renderPdfPageToPng(input.buffer, region.pageNumber, 5200)
+                    renderedPages.set(region.pageNumber, renderedPage)
+                }
+                pageImages.push({
+                    ...region,
+                    imageBuffer: await this.cropImageRegion(renderedPage, region)
+                })
+            }
+            const response = await client.responses.create({
+                model: this.model,
+                store: false,
+                instructions: [
+                    'Locate the exact printed legend glyph artwork for each supplied Firewire BOM proposal in this PDF.',
+                    `Use ${JSON.stringify(input.filename)} in every source.filename field.`,
+                    'Inspect every symbol, device, equipment, annunciation, and abbreviation legend row by row across every page.',
+                    'Match each candidate to the printed legend row primarily by device type, row description, manufacturer, model, and part number. Do not substitute a similar neighboring legend row.',
+                    'The supplied symbolLabel came from a broad document pass and may be wrong. Treat it only as a hint. A visibly printed glyph in the correctly described legend row is authoritative even when its letters differ from symbolLabel.',
+                    'The device icon is the complete artwork shown in the first SYMBOL column for the matched row. Boxed text is valid artwork: for example, a red rectangle enclosing FACP is the Fire Alarm Control Panel glyph, and a red square enclosing F is the Manual Pull Station glyph.',
+                    'For a found glyph, return a tight rectangle around the complete example artwork, including its enclosing rectangle, circle, polygon, lines, and any letters printed inside it. Exclude the legend table cell border, row description, quantities, model/part numbers, and neighboring rows.',
+                    'observedSymbolLabel is the exact short text visibly printed inside or immediately defining that glyph, such as F, H, or FS. Use an empty string for a purely graphical glyph.',
+                    'Each supplied image is a high-resolution raster of a cropped legend region. Coordinates use the complete supplied image and are normalized 0 to 1 from its top-left: xRatio is left, yRatio is top, widthRatio is width, and heightRatio is height.',
+                    'Set found true whenever the matched legend row has visible content in its first SYMBOL column, including boxed abbreviations. Set found false only when the candidate row is absent or its symbol cell is genuinely empty. For a false result, use the most relevant inspected cropId and return pageNumber and all coordinates as zero.',
+                    'Use only supplied proposalId values and return exactly one result for every supplied candidate. Return only schema-constrained JSON.'
+                ].join('\n'),
+                input: [{
+                    role: 'user',
+                    content: [
+                        ...pageImages.flatMap((page) => [
+                            { type: 'input_text', text: `CROP ${page.cropId}: this high-resolution image is an enlarged legend region extracted from original PDF page ${page.pageNumber}. Return cropId ${page.cropId}. Coordinates must be local to the complete supplied image from 0 to 1; Firewire will transform them back to the original page.` },
+                            { type: 'input_image', image_url: `data:image/png;base64,${page.imageBuffer.toString('base64')}`, detail: 'high' }
+                        ]),
+                        { type: 'input_text', text: `LEGEND_GLYPH_CANDIDATES\n${JSON.stringify(candidates)}\nEND_LEGEND_GLYPH_CANDIDATES` }
+                    ] as any
+                }],
+                max_output_tokens: Math.max(4000, candidates.length * 350),
+                metadata: {
+                    firewire_project_id: input.projectId,
+                    firewire_document_id: input.documentId,
+                    firewire_version_id: input.versionId,
+                    firewire_analysis_stage: 'legend-glyph-localization'
+                },
+                text: { format: { type: 'json_schema', name: 'firewire_legend_glyph_locations', strict: true, schema: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                        symbols: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                additionalProperties: false,
+                                properties: {
+                                    proposalId: { type: 'string' },
+                                    cropId: { type: 'string' },
+                                    found: { type: 'boolean' },
+                                    observedSymbolLabel: { type: 'string' },
+                                    pageNumber: { type: 'integer', minimum: 0 },
+                                    xRatio: { type: 'number', minimum: 0, maximum: 1 },
+                                    yRatio: { type: 'number', minimum: 0, maximum: 1 },
+                                    widthRatio: { type: 'number', minimum: 0, maximum: 1 },
+                                    heightRatio: { type: 'number', minimum: 0, maximum: 1 },
+                                    confidence: { type: 'number', minimum: 0, maximum: 1 },
+                                    source: {
+                                        type: 'object',
+                                        additionalProperties: false,
+                                        properties: sourceProperties,
+                                        required: ['filename', 'page', 'section', 'location']
+                                    }
+                                },
+                                required: [
+                                    'proposalId', 'cropId', 'found', 'observedSymbolLabel', 'pageNumber', 'xRatio', 'yRatio',
+                                    'widthRatio', 'heightRatio', 'confidence', 'source'
+                                ]
+                            }
+                        }
+                    },
+                    required: ['symbols']
+                } } }
+            }, { signal: input.signal })
+            if (!response.output_text) {
+                throw new Error('OpenAI returned no legend glyph localization output.')
+            }
+            const parsed = JSON.parse(response.output_text) as {
+                symbols?: Array<{ proposalId: string, cropId: string, observedSymbolLabel: string } & DocumentAnalysisBomProposal['legendSymbol']>
+            }
+            const allowedIds = new Set(candidates.map((candidate) => candidate.proposalId))
+            const cropsById = new Map(pageImages.map((page) => [page.cropId, page]))
+            const localized = new Map((parsed.symbols || [])
+                .filter((symbol) => allowedIds.has(String(symbol.proposalId || '')) && cropsById.has(String(symbol.cropId || '')))
+                .map((symbol) => {
+                    const crop = cropsById.get(String(symbol.cropId || ''))!
+                    return [symbol.proposalId, {
+                        observedSymbolLabel: String(symbol.observedSymbolLabel || '').replace(/\s+/g, '').slice(0, 12),
+                        crop,
+                        localBounds: {
+                            xStartRatio: Number(symbol.xRatio || 0),
+                            yStartRatio: Number(symbol.yRatio || 0),
+                            widthRatio: Number(symbol.widthRatio || 0),
+                            heightRatio: Number(symbol.heightRatio || 0)
+                        },
+                        legendSymbol: this.normalizeLegendSymbol({
+                        found: symbol.found,
+                        pageNumber: crop.pageNumber,
+                        xRatio: crop.xStartRatio + (Number(symbol.xRatio || 0) * crop.widthRatio),
+                        yRatio: crop.yStartRatio + (Number(symbol.yRatio || 0) * crop.heightRatio),
+                        widthRatio: Number(symbol.widthRatio || 0) * crop.widthRatio,
+                        heightRatio: Number(symbol.heightRatio || 0) * crop.heightRatio,
+                        confidence: symbol.confidence,
+                        source: symbol.source
+                    })
+                    }]
+                }))
+            const localizedBomActions = result.proposedBomActions.map((proposal) => {
+                const focused = localized.get(proposal.proposalId)
+                return focused?.legendSymbol.found
+                    ? {
+                        ...proposal,
+                        symbolLabel: focused.observedSymbolLabel || proposal.symbolLabel,
+                        legendSymbol: focused.legendSymbol
+                    }
+                    : proposal
+            })
+            const proposedBomActions: DocumentAnalysisBomProposal[] = []
+            for (const proposal of localizedBomActions) {
+                if (!proposal.legendSymbol?.found) {
+                    proposedBomActions.push(proposal)
+                    continue
+                }
+                try {
+                    const focused = localized.get(proposal.proposalId)
+                    if (!focused?.legendSymbol.found) {
+                        throw new Error('The focused legend crop was unavailable for preview creation.')
+                    }
+                    const local = focused.localBounds
+                    const paddingLeft = Math.max(0.01, local.widthRatio * 0.4)
+                    const paddingRight = Math.max(0.006, local.widthRatio * 0.2)
+                    const paddingY = Math.max(0.006, local.heightRatio * 0.2)
+                    const previewRegion = {
+                        xStartRatio: Math.max(0, local.xStartRatio - paddingLeft),
+                        yStartRatio: Math.max(0, local.yStartRatio - paddingY),
+                        widthRatio: Math.min(1, local.xStartRatio + local.widthRatio + paddingRight)
+                            - Math.max(0, local.xStartRatio - paddingLeft),
+                        heightRatio: Math.min(1, local.yStartRatio + local.heightRatio + paddingY)
+                            - Math.max(0, local.yStartRatio - paddingY)
+                    }
+                    const previewCrop = await this.cropImageRegion(focused.crop.imageBuffer, previewRegion)
+                    const cleanedPreviewCrop = await this.removeDisconnectedLegendGridLines(previewCrop, {
+                        xStartRatio: (local.xStartRatio - previewRegion.xStartRatio) / previewRegion.widthRatio,
+                        yStartRatio: (local.yStartRatio - previewRegion.yStartRatio) / previewRegion.heightRatio,
+                        widthRatio: local.widthRatio / previewRegion.widthRatio,
+                        heightRatio: local.heightRatio / previewRegion.heightRatio
+                    })
+                    const previewDataUrl = await this.createMaskedIconDataUrl(cleanedPreviewCrop)
+                    proposedBomActions.push({
+                        ...proposal,
+                        legendSymbol: { ...proposal.legendSymbol, previewDataUrl, previewError: '' }
+                    })
+                } catch (error) {
+                    const previewError = error instanceof Error ? error.message : String(error || 'Unable to create glyph preview.')
+                    proposedBomActions.push({
+                        ...proposal,
+                        legendSymbol: { ...proposal.legendSymbol, previewDataUrl: '', previewError }
+                    })
+                    console.error('[document-inspection] Legend glyph preview creation failed.', {
+                        projectId: input.projectId,
+                        documentId: input.documentId,
+                        proposalId: proposal.proposalId,
+                        message: previewError
+                    })
+                }
+            }
+            console.info('[document-inspection] Legend glyph localization completed.', {
+                projectId: input.projectId,
+                documentId: input.documentId,
+                responseId: response.id,
+                requestId: String((response as any)._request_id || ''),
+                candidateCount: candidates.length,
+                legendCrops: pageImages.map((page) => ({
+                    cropId: page.cropId,
+                    pageNumber: page.pageNumber,
+                    imageBytes: page.imageBuffer.length,
+                    xStartRatio: page.xStartRatio,
+                    yStartRatio: page.yStartRatio,
+                    widthRatio: page.widthRatio,
+                    heightRatio: page.heightRatio
+                })),
+                modelGlyphResults: (parsed.symbols || []).map((symbol) => ({
+                    proposalId: symbol.proposalId,
+                    cropId: symbol.cropId,
+                    found: !!symbol.found,
+                    observedSymbolLabel: symbol.observedSymbolLabel,
+                    xRatio: symbol.xRatio,
+                    yRatio: symbol.yRatio,
+                    widthRatio: symbol.widthRatio,
+                    heightRatio: symbol.heightRatio,
+                    confidence: symbol.confidence
+                })),
+                glyphCount: proposedBomActions.filter((proposal) => proposal.legendSymbol?.found).length,
+                previewCount: proposedBomActions.filter((proposal) => !!proposal.legendSymbol?.previewDataUrl).length
+            })
+            return { ...result, proposedBomActions }
+        } catch (error) {
+            if (input.signal?.aborted) throw error
+            console.error('[document-inspection] Focused legend glyph localization failed; preserving whole-document findings.', {
+                projectId: input.projectId,
+                documentId: input.documentId,
+                message: error instanceof Error ? error.message : String(error || '')
+            })
+            return result
+        }
+    }
+
+    private async renderPdfPageToPng(buffer: Buffer, pageNumber: number, targetLongEdge: number): Promise<Buffer> {
+        const { PDFiumLibrary } = await import('@hyzyla/pdfium')
+        const library = await PDFiumLibrary.init()
+        const document = await library.loadDocument(new Uint8Array(buffer))
+        try {
+            if (pageNumber < 1 || pageNumber > document.getPageCount()) {
+                throw new DocumentAnalysisInputError(`PDF page ${pageNumber} is unavailable for legend rendering.`, 409)
+            }
+            const page = document.getPage(pageNumber - 1)
+            const originalSize = page.getOriginalSize()
+            const scale = Math.max(1, Math.min(12, targetLongEdge / Math.max(originalSize.originalWidth, originalSize.originalHeight)))
+            const image = await page.render({
+                scale,
+                render: async(options) => sharp(options.data, {
+                    raw: { width: options.width, height: options.height, channels: 4 }
+                }).png().toBuffer()
+            })
+            return Buffer.from(image.data)
+        } finally {
+            document.destroy()
+            library.destroy()
+        }
+    }
+
+    private async cropImageRegion(
+        imageBuffer: Buffer,
+        region: { xStartRatio: number, yStartRatio: number, widthRatio: number, heightRatio: number }
+    ): Promise<Buffer> {
+        const metadata = await sharp(imageBuffer).metadata()
+        const imageWidth = Math.max(1, Number(metadata.width || 0))
+        const imageHeight = Math.max(1, Number(metadata.height || 0))
+        const left = Math.max(0, Math.min(imageWidth - 1, Math.floor(region.xStartRatio * imageWidth)))
+        const top = Math.max(0, Math.min(imageHeight - 1, Math.floor(region.yStartRatio * imageHeight)))
+        const right = Math.max(left + 1, Math.min(imageWidth, Math.ceil((region.xStartRatio + region.widthRatio) * imageWidth)))
+        const bottom = Math.max(top + 1, Math.min(imageHeight, Math.ceil((region.yStartRatio + region.heightRatio) * imageHeight)))
+        return sharp(imageBuffer)
+            .extract({ left, top, width: right - left, height: bottom - top })
+            .png()
+            .toBuffer()
+    }
+
+    private async removeDisconnectedLegendGridLines(
+        imageBuffer: Buffer,
+        protectedRegion: { xStartRatio: number, yStartRatio: number, widthRatio: number, heightRatio: number }
+    ): Promise<Buffer> {
+        const { data, info } = await sharp(imageBuffer)
+            .flatten({ background: '#ffffff' })
+            .removeAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true })
+        const width = info.width
+        const height = info.height
+        if (width < 2 || height < 2) return imageBuffer
+
+        // One raster pixel absorbs coordinate rounding. Larger safety expansion can pull a
+        // nearby table rule into the protected area, especially above compact CD labels.
+        const safetyX = 1 / width
+        const safetyY = 1 / height
+        const protectedLeft = Math.max(0, Math.floor((protectedRegion.xStartRatio - safetyX) * width))
+        const protectedTop = Math.max(0, Math.floor((protectedRegion.yStartRatio - safetyY) * height))
+        const protectedRight = Math.min(width, Math.ceil((protectedRegion.xStartRatio + protectedRegion.widthRatio + safetyX) * width))
+        const protectedBottom = Math.min(height, Math.ceil((protectedRegion.yStartRatio + protectedRegion.heightRatio + safetyY) * height))
+        const pixelCount = width * height
+        const ink = new Uint8Array(pixelCount)
+        const visited = new Uint8Array(pixelCount)
+        for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+            const offset = pixel * 3
+            ink[pixel] = Math.min(data[offset], data[offset + 1], data[offset + 2]) < 245 ? 1 : 0
+        }
+
+        let retainedInkPixels = 0
+        const neighbors = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const
+        for (let start = 0; start < pixelCount; start += 1) {
+            if (!ink[start] || visited[start]) continue
+            const component: number[] = []
+            const queue = [start]
+            visited[start] = 1
+            let intersectsProtectedRegion = false
+            for (let cursor = 0; cursor < queue.length; cursor += 1) {
+                const pixel = queue[cursor]
+                component.push(pixel)
+                const x = pixel % width
+                const y = Math.floor(pixel / width)
+                if (x >= protectedLeft && x < protectedRight && y >= protectedTop && y < protectedBottom) {
+                    intersectsProtectedRegion = true
+                }
+                for (const [dx, dy] of neighbors) {
+                    const nextX = x + dx
+                    const nextY = y + dy
+                    if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue
+                    const next = (nextY * width) + nextX
+                    if (!ink[next] || visited[next]) continue
+                    visited[next] = 1
+                    queue.push(next)
+                }
+            }
+            if (intersectsProtectedRegion) {
+                retainedInkPixels += component.length
+                continue
+            }
+            for (const pixel of component) {
+                const offset = pixel * 3
+                data[offset] = 255
+                data[offset + 1] = 255
+                data[offset + 2] = 255
+            }
+        }
+
+        // A malformed provider rectangle must not turn a valid preview blank. Preserve the
+        // original crop when no meaningful glyph component intersected the protected area.
+        if (retainedInkPixels < 12) return imageBuffer
+        return sharp(data, { raw: { width, height, channels: 3 } }).png().toBuffer()
+    }
+
+    private async createLegendLocalizationRegions(
+        buffer: Buffer,
+        requestedPageNumbers: number[]
+    ): Promise<Array<{
+        cropId: string
+        pageNumber: number
+        xStartRatio: number
+        yStartRatio: number
+        widthRatio: number
+        heightRatio: number
+    }>> {
+        const sourcePdf = await PDFDocument.load(buffer)
+        const preferredPageNumbers = [...new Set(requestedPageNumbers)]
+            .filter((pageNumber) => pageNumber >= 1 && pageNumber <= sourcePdf.getPageCount())
+        const preferredPageSet = new Set(preferredPageNumbers)
+        // Legend citations from the broad pass are advisory: schedule-heavy sheets can be
+        // mis-cited. Text-scan every page, but retain whole-page fallbacks only for the
+        // preferred pages when the document has no explicit legend heading at all.
+        const pageNumbers = [...new Set([
+            ...preferredPageNumbers,
+            ...Array.from({ length: sourcePdf.getPageCount() }, (_, index) => index + 1)
+        ])]
+        Object.assign(globalThis, {
+            DOMMatrix: (globalThis as any).DOMMatrix || DOMMatrix,
+            ImageData: (globalThis as any).ImageData || ImageData,
+            Path2D: (globalThis as any).Path2D || Path2D
+        })
+        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+        const loadingTask = pdfjs.getDocument({ data: new Uint8Array(buffer), disableWorker: true, useSystemFonts: true } as any)
+        const textPdf = await loadingTask.promise
+        const pages: Array<{
+            cropId: string
+            pageNumber: number
+            xStartRatio: number
+            yStartRatio: number
+            widthRatio: number
+            heightRatio: number
+        }> = []
+        const fullPageFallbacks: typeof pages = []
+        try {
+            for (const pageNumber of pageNumbers) {
+                const textPage = await textPdf.getPage(pageNumber)
+                const viewport = textPage.getViewport({ scale: 1 })
+                const textContent = await textPage.getTextContent()
+                const textItems = (textContent.items || []).flatMap((item: any) => {
+                const text = String(item?.str || '').replace(/\s+/g, ' ').trim()
+                if (!text || !Array.isArray(item?.transform)) return []
+                const transformed = (pdfjs as any).Util.transform(viewport.transform, item.transform)
+                const height = Math.max(1, Math.abs(Number(item.height || transformed[3] || 0)))
+                return [{
+                    text,
+                    normalized: text.toLocaleLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(),
+                    x: Number(transformed[4] || 0),
+                    y: Number(transformed[5] || 0) - height,
+                    width: Math.max(1, Number(item.width || 0)),
+                    height
+                }]
+                })
+                const headings = textItems.flatMap((item) => {
+                if (!/\b(symbols|legend)\b/.test(item.normalized)) return []
+                if (/\b(fire|alarm|device|equipment|sprinkler|security)\b/.test(item.normalized)) {
+                    return [item]
+                }
+                const sameLine = textItems.filter((candidate) =>
+                    Math.abs((candidate.y + (candidate.height / 2)) - (item.y + (item.height / 2)))
+                        <= Math.max(item.height, candidate.height) * 1.25
+                    && candidate.x <= item.x + item.width + (viewport.width * 0.25)
+                    && candidate.x + candidate.width >= item.x - (viewport.width * 0.25))
+                const normalizedLine = sameLine.map((candidate) => candidate.normalized).join(' ')
+                if (!/\b(fire|alarm|device|equipment|sprinkler|security)\b/.test(normalizedLine)) return []
+                const left = Math.min(...sameLine.map((candidate) => candidate.x))
+                const right = Math.max(...sameLine.map((candidate) => candidate.x + candidate.width))
+                const top = Math.min(...sameLine.map((candidate) => candidate.y))
+                const bottom = Math.max(...sameLine.map((candidate) => candidate.y + candidate.height))
+                return [{ ...item, x: left, y: top, width: right - left, height: bottom - top }]
+                })
+                const regions = headings.length > 0
+                    ? headings.slice(0, 4).map((heading) => this.getLegendTableRegion(heading, textItems, viewport.width, viewport.height))
+                    : [{ x: 0, y: 0, width: viewport.width, height: viewport.height }]
+                for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
+                    const region = regions[regionIndex]
+                    const leftRatio = Math.max(0, region.x / viewport.width)
+                    const topRatio = Math.max(0, region.y / viewport.height)
+                    const rightRatio = Math.min(1, (region.x + region.width) / viewport.width)
+                    const bottomRatio = Math.min(1, (region.y + region.height) / viewport.height)
+                    const destination = headings.length > 0
+                        ? pages
+                        : (preferredPageSet.has(pageNumber) ? fullPageFallbacks : null)
+                    destination?.push({
+                        cropId: `page-${pageNumber}-legend-${regionIndex + 1}`,
+                        pageNumber,
+                        xStartRatio: leftRatio,
+                        yStartRatio: topRatio,
+                        widthRatio: rightRatio - leftRatio,
+                        heightRatio: bottomRatio - topRatio
+                    })
+                }
+            }
+        } finally {
+            await textPdf.destroy()
+        }
+        // When at least one explicit legend heading was found, omit unrelated full-sheet
+        // fallbacks so the vision pass cannot be diluted by tiny symbols elsewhere.
+        return pages.length > 0 ? pages : fullPageFallbacks
+    }
+
+    private getLegendTableRegion(
+        heading: { x: number, y: number, width: number, height: number },
+        items: Array<{ x: number, y: number, width: number, height: number }>,
+        pageWidth: number,
+        pageHeight: number
+    ): { x: number, y: number, width: number, height: number } {
+        // Legend titles are commonly centered over a table substantially wider than the
+        // heading text. The wider seed is required to retain the complete first SYMBOL
+        // column; a title-width crop can cut the left side from boxed labels such as LCD.
+        const initialLeft = Math.max(0, heading.x - Math.max(heading.width * 0.32, pageWidth * 0.02))
+        const initialRight = Math.min(pageWidth, heading.x + heading.width + Math.max(heading.width * 0.32, pageWidth * 0.02))
+        const candidateItems = items
+            .filter((item) => item.y >= heading.y - (heading.height * 1.5))
+            .filter((item) => item.y <= Math.min(pageHeight, heading.y + (pageHeight * 0.55)))
+            .filter((item) => item.x + item.width >= initialLeft && item.x <= initialRight)
+            .sort((a, b) => a.y - b.y)
+        const linePositions = [...new Set(candidateItems.map((item) => Math.round(item.y)))].sort((a, b) => a - b)
+        let tableBottom = Math.min(pageHeight, heading.y + (pageHeight * 0.48))
+        let previousY = heading.y
+        for (const y of linePositions.filter((value) => value >= heading.y)) {
+            const gap = y - previousY
+            if (previousY > heading.y + (pageHeight * 0.08) && gap > Math.max(pageHeight * 0.055, heading.height * 5)) {
+                tableBottom = previousY + (heading.height * 3)
+                break
+            }
+            previousY = y
+        }
+        const tableItems = candidateItems.filter((item) => item.y <= tableBottom)
+        const minX = Math.max(0, Math.min(initialLeft, ...tableItems.map((item) => item.x)) - (pageWidth * 0.012))
+        const maxX = Math.min(pageWidth, Math.max(initialRight, ...tableItems.map((item) => item.x + item.width)) + (pageWidth * 0.012))
+        const top = Math.max(0, heading.y - Math.max(heading.height * 1.5, pageHeight * 0.01))
+        const bottom = Math.min(pageHeight, tableBottom + Math.max(heading.height * 2, pageHeight * 0.015))
+        return { x: minX, y: top, width: Math.max(1, maxX - minX), height: Math.max(1, bottom - top) }
     }
 
     private isInvalidReportScopeProposal(
@@ -921,6 +1518,7 @@ export class OpenAiDocumentAnalysisService {
                 quantityRationale: quantityStatus === 'LEGEND_ONLY'
                     ? `Legend-derived device candidate. A provisional BOM quantity of 1 is suggested because no reliable schedule or plan count was found. ${String(proposal.quantityRationale || '').trim()}`.trim()
                     : proposal.quantityRationale,
+                legendSymbol: this.normalizeLegendSymbol(proposal.legendSymbol),
                 catalogMatch: {
                     status: 'NOT_EVALUATED',
                     entityType: 'NONE',
@@ -935,6 +1533,28 @@ export class OpenAiDocumentAnalysisService {
             })
         }
         return normalized
+    }
+
+    private normalizeLegendSymbol(symbol: DocumentAnalysisBomProposal['legendSymbol']): DocumentAnalysisBomProposal['legendSymbol'] {
+        const xRatio = Math.max(0, Math.min(1, Number(symbol?.xRatio || 0)))
+        const yRatio = Math.max(0, Math.min(1, Number(symbol?.yRatio || 0)))
+        const widthRatio = Math.max(0, Math.min(1 - xRatio, Number(symbol?.widthRatio || 0)))
+        const heightRatio = Math.max(0, Math.min(1 - yRatio, Number(symbol?.heightRatio || 0)))
+        const found = !!symbol?.found
+            && Math.floor(Number(symbol.pageNumber || 0)) > 0
+            && widthRatio > 0
+            && heightRatio > 0
+        return {
+            ...symbol,
+            found,
+            pageNumber: found ? Math.floor(Number(symbol.pageNumber)) : 0,
+            xRatio,
+            yRatio,
+            widthRatio,
+            heightRatio,
+            confidence: Math.max(0, Math.min(1, Number(symbol?.confidence || 0))),
+            source: symbol?.source || { filename: '', page: '', section: '', location: '' }
+        }
     }
 
     private normalizeMatchText(value: unknown): string {
@@ -1112,6 +1732,7 @@ export class OpenAiDocumentAnalysisService {
             'proposedBomActions extracts device candidates and quantities for later human review. Do not claim a BOM row was created.',
             'Create a BOM proposal when the document provides a positive schedule quantity, a positive drawing symbol count, or a distinct device entry in a symbol/device legend. Do not omit a legend device merely because its plan quantity cannot yet be counted.',
             'Inspect every symbol, device, equipment, and annunciation legend exhaustively, row by row. Capture the printed symbol label, description, manufacturer, model, part number, and source location separately. Ignore wire-only line types, room labels, drafting marks, and non-device abbreviations.',
+            'For each BOM proposal, populate legendSymbol from the actual example glyph printed in the legend. Coordinates are a tight bounding rectangle around only the glyph artwork, normalized from 0 to 1 across the full PDF page from top-left. Do not include the row description, quantity, part number, or neighboring legend marks. Set found false, pageNumber 0, all coordinates 0, and an empty source when no distinct legend glyph is visible.',
             'For a legend-only device with no reliable schedule or drawing count, set both quantity Found flags false and quantities 0, set quantityStatus UNKNOWN and reconciledQuantity 0, set floorplanSymbolFound true, and explain that it is legend-derived. The server will retain it as a reviewable provisional BOM candidate.',
             'Return at most one BOM proposal per unique device/equipment identity. Use whole-document totals when the same device appears on multiple plan pages.',
             'Keep scheduleQuantity and drawingQuantity as separate evidence. Set the corresponding Found boolean false and quantity 0 when that evidence was not located.',

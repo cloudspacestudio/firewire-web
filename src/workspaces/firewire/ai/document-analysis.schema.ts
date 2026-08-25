@@ -92,6 +92,24 @@ const bomProposalSchema = {
         confidence: { type: 'number' },
         scheduleSource: sourceSchema,
         drawingSource: sourceSchema,
+        legendSymbol: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                found: { type: 'boolean' },
+                pageNumber: { type: 'integer', minimum: 0 },
+                xRatio: { type: 'number', minimum: 0, maximum: 1 },
+                yRatio: { type: 'number', minimum: 0, maximum: 1 },
+                widthRatio: { type: 'number', minimum: 0, maximum: 1 },
+                heightRatio: { type: 'number', minimum: 0, maximum: 1 },
+                confidence: { type: 'number', minimum: 0, maximum: 1 },
+                source: sourceSchema
+            },
+            required: [
+                'found', 'pageNumber', 'xRatio', 'yRatio', 'widthRatio',
+                'heightRatio', 'confidence', 'source'
+            ]
+        },
         catalogMatch: {
             type: 'object',
             additionalProperties: false,
@@ -117,7 +135,7 @@ const bomProposalSchema = {
         'partNumber', 'description', 'scheduleQuantityFound', 'scheduleQuantity',
         'drawingQuantityFound', 'drawingQuantity', 'quantityStatus', 'reconciledQuantity',
         'floorplanSymbolFound', 'floorplanPlacementTarget', 'quantityRationale', 'evidenceType',
-        'confidence', 'scheduleSource', 'drawingSource', 'catalogMatch'
+        'confidence', 'scheduleSource', 'drawingSource', 'legendSymbol', 'catalogMatch'
     ]
 }
 
@@ -166,7 +184,7 @@ const floorplanProposalSchema = {
     ]
 }
 
-export const DOCUMENT_INSPECTION_SCHEMA_VERSION = 5
+export const DOCUMENT_INSPECTION_SCHEMA_VERSION = 6
 
 export const documentInspectionJsonSchema = {
     type: 'object',

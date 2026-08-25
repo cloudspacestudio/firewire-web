@@ -92,6 +92,17 @@ export class SqlDb {
             .query(`INSERT INTO dbo.deviceIconGroups(iconGroupId, name) VALUES(@iconGroupId, @name)`)
         return iconGroupId
     }
+    public async getOrCreateDeviceIconGroup(name: string): Promise<string> {
+        await this.ensureDeviceIconSchema()
+        const normalizedName = String(name || '').trim()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        const existing = await pool.request()
+            .input('name', mssql.NVarChar(200), normalizedName)
+            .query(`SELECT TOP (1) iconGroupId FROM dbo.deviceIconGroups WHERE LOWER(LTRIM(RTRIM(name)))=LOWER(@name) ORDER BY createat ASC`)
+        const existingId = String(existing.recordset?.[0]?.iconGroupId || '')
+        return existingId || this.createDeviceIconGroup(normalizedName)
+    }
     public async updateDeviceIconGroup(iconGroupId: string, name: string): Promise<boolean> {
         await this.ensureDeviceIconSchema()
         const sql = this.app.locals.sqlserver
@@ -168,6 +179,22 @@ export class SqlDb {
         this.app.locals.devices = null
         this.app.locals.vwDevices = null
         return true
+    }
+    public async assignDeviceIcon(deviceId: string, iconId: string, updatedBy = 'system'): Promise<void> {
+        await this.ensureDeviceMaterialTextSchema()
+        const sql = this.app.locals.sqlserver
+        const pool = await sql.init()
+        await pool.request()
+            .input('deviceId', mssql.UniqueIdentifier, deviceId)
+            .input('iconId', mssql.UniqueIdentifier, iconId)
+            .input('updatedBy', mssql.NVarChar(100), String(updatedBy || 'system').trim())
+            .query(`
+                UPDATE dbo.devices
+                SET iconId=@iconId, updateat=GETDATE(), updateby=@updatedBy
+                WHERE deviceId=@deviceId
+            `)
+        this.app.locals.devices = null
+        this.app.locals.vwDevices = null
     }
     public async getVendors(): Promise<Vendor[]> {
         await this.ensureVendorImportSchema()

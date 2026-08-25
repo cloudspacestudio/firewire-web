@@ -13,6 +13,8 @@
   "license": "ISC",
   "dependencies": {
     "@azure/storage-blob": "^12.27.0",
+    "@hyzyla/pdfium": "^2.1.13",
+    "@napi-rs/canvas": "^0.1.80",
     "@types/xlsx": "^0.0.35",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
@@ -28,6 +30,7 @@
     "multer": "^1.4.5-lts.2",
     "openai": "^7.4.0",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.6.205",
     "pg": "^8.13.1",
     "sharp": "^0.35.3",
     "ts-node": "^10.9.2",

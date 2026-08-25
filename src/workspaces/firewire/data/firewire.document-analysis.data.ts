@@ -966,7 +966,7 @@ export class FirewireDocumentAnalysisData {
                         sourceAnalysisId: record.id,
                         sourceDocumentId: record.documentId,
                         sourceDocumentVersionId: record.versionId,
-                        floorplanDesign: { annotations: [], rotationDegrees: 0, symbolDisplayMode: 'bubble', updatedAt: now },
+                        floorplanDesign: { annotations: [], rotationDegrees: 0, symbolDisplayMode: 'icon', updatedAt: now },
                         versions: [{
                             id: versionId,
                             versionNumber: 1,
@@ -1049,8 +1049,11 @@ export class FirewireDocumentAnalysisData {
                     const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
                     const floorplanApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
                     const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
-                    const floorplanFileId = floorplanApplication?.floorplanFileId || evaluatedProposal.floorplanMatch?.floorplanFileId || ''
                     const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
+                    const appliedFloorplanFileId = files.some((file) => String(file.id || '') === floorplanApplication?.floorplanFileId)
+                        ? floorplanApplication?.floorplanFileId || ''
+                        : ''
+                    const floorplanFileId = evaluatedProposal.floorplanMatch?.floorplanFileId || appliedFloorplanFileId
                     const floorplan = files.find((file) => String(file.id || '') === floorplanFileId && String(file.folderId || '') === 'floorplans')
                     const version = floorplan?.versions?.[floorplan.versions.length - 1]
                     if (!floorplan || !version) return res.status(409).json({ message: 'Create or match the floorplan before locating symbols.' })
@@ -1186,10 +1189,13 @@ export class FirewireDocumentAnalysisData {
                     const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
                     const floorplanApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
                     const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
-                    const floorplanFileId = floorplanApplication?.floorplanFileId || evaluatedProposal.floorplanMatch?.floorplanFileId || ''
+                    const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
+                    const appliedFloorplanFileId = files.some((file) => String(file.id || '') === floorplanApplication?.floorplanFileId)
+                        ? floorplanApplication?.floorplanFileId || ''
+                        : ''
+                    const floorplanFileId = evaluatedProposal.floorplanMatch?.floorplanFileId || appliedFloorplanFileId
                     if (!floorplanFileId) return res.status(409).json({ message: 'Create or match the floorplan before placing symbols.' })
 
-                    const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
                     const floorplan = files.find((file) => String(file.id || '') === floorplanFileId && String(file.folderId || '') === 'floorplans')
                     if (!floorplan) return res.status(409).json({ message: 'The target floorplan is no longer available.' })
                     const latestProject = await new FirewireProjectRepository(req.app).getFirewireProject(context.project.uuid)

@@ -465,15 +465,7 @@ export class OpenAiDocumentAnalysisService {
         tile: FloorplanAnalysisTile,
         tileCount: number
     ): Promise<DocumentAnalysisFloorplanSymbolPlacement[]> {
-        let fileId = ''
-        try {
-            const uploadedFile = await client.files.create({
-                file: await toFile(tile.buffer, `tile-${tile.pageNumber}-${input.filename}`, { type: 'application/pdf' }),
-                purpose: 'user_data',
-                expires_after: { anchor: 'created_at', seconds: 24 * 60 * 60 }
-            }, { signal: input.signal })
-            fileId = uploadedFile.id
-            const response = await client.responses.create({
+        const response = await client.responses.create({
                 model: this.model,
                 store: false,
                 instructions: [
@@ -483,15 +475,16 @@ export class OpenAiDocumentAnalysisService {
                     'Use printed symbol shape, abbreviation, nearby device tag, and candidate description together. Do not require a symbol to have the same color as its Firewire bubble.',
                     'Expected project quantity is a recall aid for the entire drawing, not a required count for this crop. Never invent marks to reach it.',
                     'Exclude legend examples, schedules, title blocks, details, notes, room labels, circuit text, and wire junctions that are not device symbols.',
-                    'xRatio and yRatio must be the center of the colored device graphic in this one-page crop, normalized from 0 to 1 from top-left. Do not center on adjacent text.',
-                    'source.page must be "1" because the supplied PDF has exactly one crop page.',
+                    'The supplied PNG is a pixel crop of the same rotation-aware raster shown by the Firewire floorplan designer.',
+                    'xRatio and yRatio must be the center of the colored device graphic in this crop, normalized from 0 to 1 from top-left. Do not compensate for PDF page rotation, printed dimensions, margins, or DPI. Do not center on adjacent text.',
+                    'source.page must be "1" because the supplied image is one crop.',
                     'Use only a supplied proposalId, copy its identity fields, and use empty placementId. Return an empty array only after checking every candidate across the entire crop.',
                     `This is crop ${tile.pageNumber} of ${tileCount} from original PDF page ${input.sourcePageNumber}. Use ${JSON.stringify(input.filename)} in source.filename.`
                 ].join('\n'),
                 input: [{
                     role: 'user',
                     content: [
-                        { type: 'input_file', file_id: fileId, detail: 'high' },
+                        { type: 'input_image', image_url: `data:image/png;base64,${tile.buffer.toString('base64')}`, detail: 'high' },
                         {
                             type: 'input_text',
                             text: [
@@ -519,49 +512,36 @@ export class OpenAiDocumentAnalysisService {
                         schema: floorplanSymbolLocationJsonSchema
                     }
                 }
-            }, { signal: input.signal })
-            if (response.status !== 'completed' || !response.output_text) {
-                throw new Error(`OpenAI did not complete floorplan crop ${tile.pageNumber}.`)
-            }
-            const parsed = JSON.parse(response.output_text) as { placements: DocumentAnalysisFloorplanSymbolPlacement[] }
-            if (!this.validateFloorplanLocations(parsed)) {
-                const details = this.validateFloorplanLocations.errors
-                    ?.map((error) => `${error.instancePath || '/'} ${error.message || 'is invalid'}`)
-                    .join('; ')
-                throw new Error(`OpenAI floorplan crop output failed schema validation: ${details || 'unknown validation error'}`)
-            }
-            const candidates = new Map(input.bomCandidates.map((candidate) => [candidate.proposalId, candidate]))
-            return (parsed.placements || []).filter((placement) =>
-                candidates.has(String(placement.bomProposalId || ''))
-                && Number(placement.confidence || 0) >= 0.45)
-                .map((placement, index) => {
-                    const candidate = candidates.get(placement.bomProposalId)!
-                    return {
-                        ...placement,
-                        placementId: `tile-${tile.pageNumber}-placement-${index + 1}`,
-                        deviceType: candidate.deviceType,
-                        symbolLabel: candidate.symbolLabel,
-                        manufacturer: candidate.manufacturer,
-                        modelNumber: candidate.modelNumber,
-                        partNumber: candidate.partNumber,
-                        xRatio: Math.max(0, Math.min(1, tile.xStartRatio + (Number(placement.xRatio || 0) * tile.widthRatio))),
-                        yRatio: Math.max(0, Math.min(1, tile.yStartRatio + (Number(placement.yRatio || 0) * tile.heightRatio))),
-                        confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0)))
-                    }
-                })
-        } finally {
-            if (fileId) {
-                try {
-                    await client.files.delete(fileId)
-                } catch (cleanupError) {
-                    console.error('OpenAI focused floorplan tile temporary file cleanup failed.', {
-                        fileId,
-                        tilePage: tile.pageNumber,
-                        message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError || '')
-                    })
-                }
-            }
+        }, { signal: input.signal })
+        if (response.status !== 'completed' || !response.output_text) {
+            throw new Error(`OpenAI did not complete floorplan crop ${tile.pageNumber}.`)
         }
+        const parsed = JSON.parse(response.output_text) as { placements: DocumentAnalysisFloorplanSymbolPlacement[] }
+        if (!this.validateFloorplanLocations(parsed)) {
+            const details = this.validateFloorplanLocations.errors
+                ?.map((error) => `${error.instancePath || '/'} ${error.message || 'is invalid'}`)
+                .join('; ')
+            throw new Error(`OpenAI floorplan crop output failed schema validation: ${details || 'unknown validation error'}`)
+        }
+        const candidates = new Map(input.bomCandidates.map((candidate) => [candidate.proposalId, candidate]))
+        return (parsed.placements || []).filter((placement) =>
+            candidates.has(String(placement.bomProposalId || ''))
+            && Number(placement.confidence || 0) >= 0.45)
+            .map((placement, index) => {
+                const candidate = candidates.get(placement.bomProposalId)!
+                return {
+                    ...placement,
+                    placementId: `tile-${tile.pageNumber}-placement-${index + 1}`,
+                    deviceType: candidate.deviceType,
+                    symbolLabel: candidate.symbolLabel,
+                    manufacturer: candidate.manufacturer,
+                    modelNumber: candidate.modelNumber,
+                    partNumber: candidate.partNumber,
+                    xRatio: Math.max(0, Math.min(1, tile.xStartRatio + (Number(placement.xRatio || 0) * tile.widthRatio))),
+                    yRatio: Math.max(0, Math.min(1, tile.yStartRatio + (Number(placement.yRatio || 0) * tile.heightRatio))),
+                    confidence: Math.max(0, Math.min(1, Number(placement.confidence || 0)))
+                }
+            })
     }
 
     private async createFloorplanAnalysisTiles(buffer: Buffer): Promise<{ tiles: FloorplanAnalysisTile[] }> {
@@ -569,8 +549,14 @@ export class OpenAiDocumentAnalysisService {
         if (sourcePdf.getPageCount() !== 1) {
             throw new DocumentAnalysisInputError('Focused floorplan location analysis requires a one-page PDF floorplan.', 409)
         }
-        const sourcePage = sourcePdf.getPage(0)
-        const { x: cropX, y: cropY, width, height } = sourcePage.getCropBox()
+        // PDF page boxes use unrotated bottom-left coordinates. The designer and AI both
+        // work in a rendered top-left coordinate system. Rasterize first so CropBox and
+        // /Rotate are resolved exactly once; tiling the raw page box displaced every
+        // placement on rotated landscape sheets.
+        const canonicalRaster = await this.renderPdfPageToPng(buffer, 1, 4096)
+        const metadata = await sharp(canonicalRaster).metadata()
+        const width = Math.max(1, Number(metadata.width || 0))
+        const height = Math.max(1, Number(metadata.height || 0))
         const columns = 4
         const rows = 3
         const overlapXRatio = 0.02
@@ -583,29 +569,26 @@ export class OpenAiDocumentAnalysisService {
                 const xEndRatio = Math.min(1, ((column + 1) / columns) + overlapXRatio)
                 const yStartRatio = Math.max(0, (row / rows) - overlapYRatio)
                 const yEndRatio = Math.min(1, ((row + 1) / rows) + overlapYRatio)
-                const tileWidth = width * (xEndRatio - xStartRatio)
-                const tileHeight = height * (yEndRatio - yStartRatio)
-                const pdfYBottom = height * (1 - yEndRatio)
-                const outputPdf = await PDFDocument.create()
-                const embedded = await outputPdf.embedPage(sourcePage, {
-                    left: cropX + (width * xStartRatio),
-                    bottom: cropY + pdfYBottom,
-                    right: cropX + (width * xEndRatio),
-                    top: cropY + pdfYBottom + tileHeight
-                })
-                const outputPage = outputPdf.addPage([tileWidth, tileHeight])
-                outputPage.drawPage(embedded, { x: 0, y: 0, width: tileWidth, height: tileHeight })
+                const left = Math.max(0, Math.min(width - 1, Math.floor(width * xStartRatio)))
+                const top = Math.max(0, Math.min(height - 1, Math.floor(height * yStartRatio)))
+                const right = Math.max(left + 1, Math.min(width, Math.ceil(width * xEndRatio)))
+                const bottom = Math.max(top + 1, Math.min(height, Math.ceil(height * yEndRatio)))
                 pageNumber += 1
                 tiles.push({
                     pageNumber,
-                    buffer: Buffer.from(await outputPdf.save()),
-                    xStartRatio,
-                    yStartRatio,
-                    widthRatio: xEndRatio - xStartRatio,
-                    heightRatio: yEndRatio - yStartRatio
+                    buffer: await sharp(canonicalRaster).extract({ left, top, width: right - left, height: bottom - top }).png().toBuffer(),
+                    xStartRatio: left / width,
+                    yStartRatio: top / height,
+                    widthRatio: (right - left) / width,
+                    heightRatio: (bottom - top) / height
                 })
             }
         }
+        console.info('[document-inspection] Canonical floorplan raster tiled.', {
+            width,
+            height,
+            tileCount: tiles.length
+        })
         return { tiles }
     }
 
@@ -1149,7 +1132,7 @@ export class OpenAiDocumentAnalysisService {
         const document = await library.loadDocument(new Uint8Array(buffer))
         try {
             if (pageNumber < 1 || pageNumber > document.getPageCount()) {
-                throw new DocumentAnalysisInputError(`PDF page ${pageNumber} is unavailable for legend rendering.`, 409)
+                throw new DocumentAnalysisInputError(`PDF page ${pageNumber} is unavailable for rendering.`, 409)
             }
             const page = document.getPage(pageNumber - 1)
             const originalSize = page.getOriginalSize()

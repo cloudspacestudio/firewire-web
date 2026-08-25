@@ -262,7 +262,19 @@ export class FirewireData {
                         return res.status(400).json({ message: 'workspaceKey is required.' })
                     }
                     const sqldb = new SqlDb(req.app)
-                    await sqldb.saveWorkspaceStorage('project-doc-library', workspaceKey, JSON.stringify(req.body?.payload || req.body || {}), 'system')
+                    const current = await FirewireData.loadStoredWorkspace(sqldb, 'project-doc-library', workspaceKey, { files: [] })
+                    const incoming = req.body?.payload || req.body || {}
+                    const deletedFileIds = new Set((Array.isArray(current.payload?.deletedFileIds) ? current.payload.deletedFileIds : [])
+                        .map((value: unknown) => String(value || '').trim())
+                        .filter(Boolean))
+                    const files = (Array.isArray(incoming?.files) ? incoming.files : [])
+                        .filter((file: any) => !deletedFileIds.has(String(file?.id || '').trim()))
+                    const nextPayload = {
+                        ...incoming,
+                        files,
+                        deletedFileIds: [...deletedFileIds].slice(-500)
+                    }
+                    await sqldb.saveWorkspaceStorage('project-doc-library', workspaceKey, JSON.stringify(nextPayload), 'system')
                     const result = await FirewireData.loadStoredWorkspace(sqldb, 'project-doc-library', workspaceKey, { files: [] })
                     return res.status(200).json({ data: result })
                 } catch (err: Error|any) {
@@ -457,6 +469,9 @@ export class FirewireData {
                     }
 
                     const deletedFileIds = new Set(filesToDelete.map((item: any) => String(item?.id || '')))
+                    const priorDeletedFileIds = (Array.isArray(workspace.payload?.deletedFileIds) ? workspace.payload.deletedFileIds : [])
+                        .map((value: unknown) => String(value || '').trim())
+                        .filter(Boolean)
                     const remainingFiles = files.filter((item: any) => !deletedFileIds.has(String(item?.id || '')))
                         .map((item: any) => {
                             const annotations = Array.isArray(item?.floorplanDesign?.annotations)
@@ -478,7 +493,8 @@ export class FirewireData {
                         })
                     const nextPayload = {
                         ...(workspace.payload || {}),
-                        files: remainingFiles
+                        files: remainingFiles,
+                        deletedFileIds: [...new Set([...priorDeletedFileIds, ...deletedFileIds])].slice(-500)
                     }
                     await sqldb.saveWorkspaceStorage('project-doc-library', workspaceKey, JSON.stringify(nextPayload), 'system')
                     const result = await FirewireData.loadStoredWorkspace(sqldb, 'project-doc-library', workspaceKey, { files: [] })

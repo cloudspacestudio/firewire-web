@@ -86,6 +86,7 @@ MSAL/auth settings are created at runtime in deployed environments. Future agent
 - `docs/domain-model.md`: tenants, projects, devices, parts/materials, BOMs, floorplans, documents, Fieldwire.
 - `docs/parts-model.md`: master parts table, import flow, routes, and migration notes.
 - `docs/device-parts-bom-snapshot-transition-plan.md`: temporary migration plan for replacing `materials`/`devicematerials` dependencies with device part composition, BOM row snapshots, and BOM-row-based floorplan symbols.
+- `docs/legend-symbol-identification-precision-plan.md`: focused improvement plan for exhaustive legend-row discovery, exact near-duplicate identity, glyph-reference classification, unmatched-symbol recovery, and measurable floorplan symbol precision/recall.
 - `docs/sql-naming-conventions.md`: SQL table/view naming, audit fields, constraints, and compatibility alias rules.
 - `docs/implementation-patterns.md`: conventions for backend, SQL, Angular, storage, and style reuse.
 - `docs/auth-and-runtime-config.md`: Entra/MSAL behavior and runtime config warnings.

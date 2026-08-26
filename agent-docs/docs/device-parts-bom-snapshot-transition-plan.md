@@ -111,6 +111,7 @@ Each BOM row should have a durable `bomRowId` or `id`. Suggested fields:
 Rules:
 
 - Once added, the BOM row is divorced from live `devices` and `parts` values.
+- Device-source detail dialogs expose an explicit `Refresh Device Metadata` exception for stale operational metadata. The refresh reloads the current device icon, floorplan label, custom attributes, tags, and media into the BOM row and propagates that metadata to annotations linked by the stable BOM row id. It must preserve BOM quantity, pricing, labor, part composition, placement identity/position, and placement-entered editable attribute values; current read-only device attribute values replace their stale annotation values.
 - Users may edit BOM row part number, description, cost, labor, category/type, and include-on-floorplan fields.
 - BOM rows selected directly from parts default `includeOnFloorplan=false`.
 - A user may explicitly promote a part-only BOM row into a reusable device through the shared Create Device From Part workflow. Replace the row's catalog snapshot in place rather than deleting and re-adding it: preserve its stable row id, quantity, placement target, document-analysis provenance, and floorplan annotations while changing `sourceKind`/`sourceDeviceId` to the created device and clearing the obsolete direct `sourcePartId`. If placements already reference the row, require the created device to remain floorplan-enabled.

@@ -10,6 +10,10 @@ import {
     FirewireProjectTemplateInput,
     FirewireProjectRepository
 } from '../repository/firewireproject.repository'
+import {
+    FirewireProjectSettingRecord,
+    FirewireProjectSettingsRepository
+} from '../repository/firewireprojectsettings.repository'
 
 export class FirewireProjectsData {
     static manifestItems = [
@@ -113,7 +117,9 @@ export class FirewireProjectsData {
                     const fieldwire = req.app.locals.fieldwire as FieldwireSDK
                     const sqldb = new SqlDb(req.app)
                     const reconciledProject = await clearStaleFieldwireMapping(fieldwire, repository, project, userId)
-                    const plan = await buildFieldwireImportPlan(fieldwire, sqldb, reconciledProject)
+                    const settingsRepository = new FirewireProjectSettingsRepository(req.app)
+                    const fieldwireStatuses = await loadFieldwireStatusDefinitions(settingsRepository, reconciledProject.projectType)
+                    const plan = await buildFieldwireImportPlan(fieldwire, sqldb, reconciledProject, fieldwireStatuses)
                     return res.status(200).json({
                         data: plan
                     })
@@ -148,7 +154,9 @@ export class FirewireProjectsData {
                     const fieldwire = req.app.locals.fieldwire as FieldwireSDK
                     const sqldb = new SqlDb(req.app)
                     const reconciledProject = await clearStaleFieldwireMapping(fieldwire, repository, project, userId)
-                    const result = await executeFieldwireImport(fieldwire, sqldb, repository, reconciledProject, userId)
+                    const settingsRepository = new FirewireProjectSettingsRepository(req.app)
+                    const fieldwireStatuses = await loadFieldwireStatusDefinitions(settingsRepository, reconciledProject.projectType)
+                    const result = await executeFieldwireImport(fieldwire, sqldb, repository, reconciledProject, userId, fieldwireStatuses)
                     return res.status(200).json({
                         data: result,
                         message: result.message
@@ -829,7 +837,12 @@ function getFieldwireSymbolFinancials(symbol: any, symbolFinancials: Map<string,
     }
 }
 
-async function buildFieldwireImportPlan(fieldwire: FieldwireSDK, sqldb: SqlDb, project: FirewireProjectRecord): Promise<any> {
+async function buildFieldwireImportPlan(
+    fieldwire: FieldwireSDK,
+    sqldb: SqlDb,
+    project: FirewireProjectRecord,
+    fieldwireStatuses: FirewireProjectSettingRecord[]
+): Promise<any> {
     const accountProjects = await fieldwire.accountProjects()
     const normalizedProjectNbr = normalizeLookupKey(project.projectNbr)
     const fieldwireProject = (project.fieldwireId
@@ -845,6 +858,7 @@ async function buildFieldwireImportPlan(fieldwire: FieldwireSDK, sqldb: SqlDb, p
     const actionItems: any[] = []
     const floorplanPlans: any[] = []
     let taskCreateCount = 0
+    const statusConfigurationError = getFieldwireStatusConfigurationError(project.projectType, fieldwireStatuses)
 
     if (!fieldwireProject) {
         actionItems.push({
@@ -852,6 +866,17 @@ async function buildFieldwireImportPlan(fieldwire: FieldwireSDK, sqldb: SqlDb, p
             status: 'required',
             label: 'Create Fieldwire project',
             detail: `Create ${project.name || 'project'}${project.projectNbr ? ` with project number ${project.projectNbr}` : ''}.`
+        })
+    }
+
+    if (!fieldwireProject || statusConfigurationError) {
+        actionItems.push({
+            type: 'configure-statuses',
+            status: statusConfigurationError ? 'blocked' : 'required',
+            label: `Configure ${project.projectType} Fieldwire statuses`,
+            detail: !statusConfigurationError
+                ? `Create ${fieldwireStatuses.length} ordered status${fieldwireStatuses.length === 1 ? '' : 'es'} and begin tasks in General.`
+                : statusConfigurationError
         })
     }
 
@@ -881,7 +906,7 @@ async function buildFieldwireImportPlan(fieldwire: FieldwireSDK, sqldb: SqlDb, p
         const latestVersion = latestFileVersion(floorplan)
         const nameWithoutExtension = getFileBaseName(floorplan.name)
         const matchingFloorplan = findMatchingFieldwireFloorplan(fieldwireFloorplans, floorplan.name, nameWithoutExtension)
-        const symbols = getFloorplanSymbols(floorplan)
+        const symbols = getFloorplanSymbols(floorplan, project)
         const matchingFloorplanReady = matchingFloorplan ? isFieldwireFloorplanReady(matchingFloorplan) : false
         const existingTasks = matchingFloorplan?.id ? (fieldwireFloorplanTasksById.get(String(matchingFloorplan.id)) || []) : []
         const taskPlans = symbols.map((symbol: any) => {
@@ -964,7 +989,7 @@ async function buildFieldwireImportPlan(fieldwire: FieldwireSDK, sqldb: SqlDb, p
             url: `https://app.fieldwire.com/projects/${fieldwireProject.id}`
         } : null,
         status: fieldwireProject ? 'project-exists' : 'project-missing',
-        canImport: actionItems.length > 0,
+        canImport: actionItems.length > 0 && !actionItems.some((item) => item.status === 'blocked'),
         summary: {
             floorplans: floorplanPlans.length,
             floorplansToCreate: floorplanPlans.filter((item) => item.status === 'required').length,
@@ -981,11 +1006,25 @@ async function executeFieldwireImport(
     sqldb: SqlDb,
     repository: FirewireProjectRepository,
     project: FirewireProjectRecord,
-    userId: string
+    userId: string,
+    fieldwireStatuses: FirewireProjectSettingRecord[]
 ): Promise<any> {
     const results: any[] = []
     let workingProject = project
-    let plan = await buildFieldwireImportPlan(fieldwire, sqldb, workingProject)
+    let plan = await buildFieldwireImportPlan(fieldwire, sqldb, workingProject, fieldwireStatuses)
+    const statusConfigurationError = getFieldwireStatusConfigurationError(workingProject.projectType, fieldwireStatuses)
+    if (statusConfigurationError) {
+        return {
+            success: false,
+            message: 'Fieldwire import was not started because its task statuses are not ready.',
+            results: [{
+                type: 'configure-statuses',
+                label: `Configure ${workingProject.projectType} Fieldwire statuses`,
+                status: 'failed',
+                detail: statusConfigurationError
+            }]
+        }
+    }
     if (!plan.canImport) {
         return {
             success: true,
@@ -1043,11 +1082,40 @@ async function executeFieldwireImport(
     }
 
     const fieldwireProjectId = String(fieldwireProject.id)
+    let fieldwireProjectUser: any
+    try {
+        fieldwireProjectUser = await loadFieldwireProjectUser(fieldwire, fieldwireProjectId)
+        const generalStatus = await ensureFieldwireProjectStatuses(
+            fieldwire,
+            fieldwireProjectId,
+            workingProject.projectType,
+            fieldwireStatuses,
+            fieldwireProjectUser
+        )
+        results.push({
+            type: 'configure-statuses',
+            label: `Configure ${workingProject.projectType} Fieldwire statuses`,
+            status: 'success',
+            detail: `Applied ${fieldwireStatuses.length} ordered status${fieldwireStatuses.length === 1 ? '' : 'es'}; new tasks begin in ${generalStatus.name}.`
+        })
+    } catch (err: any) {
+        results.push({
+            type: 'configure-statuses',
+            label: `Configure ${workingProject.projectType} Fieldwire statuses`,
+            status: 'failed',
+            detail: err?.message || String(err)
+        })
+        return {
+            success: false,
+            message: 'Fieldwire import stopped before floorplans or tasks because project statuses could not be configured.',
+            results
+        }
+    }
     const workspace = await loadProjectDocLibraryPayload(sqldb, workingProject.uuid)
     const floorplans = getFirewireFloorplans(workspace)
     const floorplansByFirewireFileId = new Map<string, any>()
     let fieldwireFloorplans = await fieldwire.projectFloorplans(fieldwireProjectId, true)
-    const taskContext = await loadFieldwireTaskContext(fieldwire, fieldwireProjectId)
+    const taskContext = await loadFieldwireTaskContext(fieldwire, fieldwireProjectId, fieldwireProjectUser)
     const symbolFinancials = buildFieldwireSymbolFinancialMap(workingProject)
 
     for (const floorplan of floorplans) {
@@ -1102,7 +1170,7 @@ async function executeFieldwireImport(
     for (const floorplan of floorplans) {
         let matchingFloorplan = floorplansByFirewireFileId.get(String(floorplan.id))
             || findMatchingFieldwireFloorplan(fieldwireFloorplans as any[], floorplan.name, getFileBaseName(floorplan.name))
-        const symbols = getFloorplanSymbols(floorplan)
+        const symbols = getFloorplanSymbols(floorplan, workingProject)
         const createdSymbolIds = new Set<string>()
         if (!matchingFloorplan?.id) {
             const symbolCount = symbols.length
@@ -1416,16 +1484,203 @@ async function waitForFieldwireFloorplan(fieldwire: FieldwireSDK, projectId: str
     return null
 }
 
-async function loadFieldwireTaskContext(fieldwire: FieldwireSDK, projectId: string): Promise<any> {
+async function loadFieldwireStatusDefinitions(
+    repository: FirewireProjectSettingsRepository,
+    division: FirewireProjectRecord['projectType']
+): Promise<FirewireProjectSettingRecord[]> {
+    const catalog = await repository.listAll()
+    return catalog.fieldwireStatuses
+        .filter((item) => item.isActive && item.division === division)
+        .sort((left, right) => left.sortOrder - right.sortOrder || left.label.localeCompare(right.label))
+}
+
+async function ensureFieldwireProjectStatuses(
+    fieldwire: FieldwireSDK,
+    projectId: string,
+    division: FirewireProjectRecord['projectType'],
+    definitions: FirewireProjectSettingRecord[],
+    projectUser: any
+): Promise<any> {
+    const configurationError = getFieldwireStatusConfigurationError(division, definitions)
+    if (configurationError) throw new Error(configurationError)
+    const desiredNames = definitions.map((item) => normalizeLookupKey(item.label))
+
+    const currentStatuses = normalizeArray(await fieldwire.statuses(projectId) as any)
+    const projectUserId = Number(projectUser?.id)
+    if (!Number.isInteger(projectUserId) || projectUserId <= 0) {
+        throw new Error('No valid Fieldwire project user is available for status provisioning.')
+    }
+    const claimedStatusIds = new Set<string>()
+    type StatusKind = 'open' | 'tracked' | 'verified'
+    type StatusMutation = {
+        project_id: string
+        creator_user_id: number
+        last_editor_user_id: number
+        name: string
+        ordinal: number
+        color: string
+        kind: StatusKind
+        required_role: string
+    }
+    const create: StatusMutation[] = []
+    const update: Array<StatusMutation & { id: string }> = []
+    const protectedOpenStatus = currentStatuses.find((status: any) => status?.is_default && status?.id)
+        || currentStatuses.find((status: any) => normalizeLookupKey(status?.kind) === 'open' && status?.id)
+    const protectedTrackedStatus = currentStatuses.find((status: any) => normalizeLookupKey(status?.kind) === 'tracked' && status?.id)
+    const protectedVerifiedStatus = currentStatuses.find((status: any) => normalizeLookupKey(status?.kind) === 'verified' && status?.id)
+    const firstTrackedDefinition = definitions.find((definition) => definition.statusKind === 'tracked')
+    const verifiedDefinition = definitions.find((definition) => definition.statusKind === 'verified')
+    const targets: Array<{
+        definition: FirewireProjectSettingRecord
+        existing?: any
+        kind: StatusKind
+        requiredRole: string
+    }> = definitions.map((definition) => ({
+        definition,
+        existing: normalizeLookupKey(definition.label) === 'general'
+            ? protectedOpenStatus
+            : definition.uuid === firstTrackedDefinition?.uuid
+                ? protectedTrackedStatus
+                : definition.uuid === verifiedDefinition?.uuid
+                    ? protectedVerifiedStatus
+                    : undefined,
+        kind: definition.statusKind as StatusKind,
+        requiredRole: definition.statusKind === 'verified' ? 'admin' : 'follower'
+    }))
+
+    targets.forEach((target, index) => {
+        const name = String(target.definition.label || '').trim()
+        const color = String(target.definition.color || '').trim().toUpperCase()
+        const ordinal = index + 1
+        const preferredId = String(target.existing?.id || '')
+        const existing = preferredId && !claimedStatusIds.has(preferredId)
+            ? target.existing
+            : currentStatuses.find((status: any) =>
+                !claimedStatusIds.has(String(status?.id || ''))
+                && normalizeLookupKey(status?.name) === normalizeLookupKey(name)
+                && normalizeLookupKey(status?.kind) === target.kind
+            )
+        if (existing?.id) {
+            const id = String(existing.id)
+            claimedStatusIds.add(id)
+            if (String(existing.name || '').trim() !== name
+                || String(existing.color || '').trim().toUpperCase() !== color
+                || Number(existing.ordinal) !== ordinal
+                || normalizeLookupKey(existing.kind) !== target.kind
+                || String(existing.required_role || '') !== target.requiredRole) {
+                const creatorUserId = Number(existing.creator_user_id)
+                update.push({
+                    id,
+                    project_id: projectId,
+                    creator_user_id: Number.isInteger(creatorUserId) && creatorUserId > 0 ? creatorUserId : projectUserId,
+                    last_editor_user_id: projectUserId,
+                    name,
+                    ordinal,
+                    color,
+                    kind: target.kind,
+                    required_role: target.requiredRole
+                })
+            }
+            return
+        }
+        create.push({
+            project_id: projectId,
+            creator_user_id: projectUserId,
+            last_editor_user_id: projectUserId,
+            name,
+            ordinal,
+            color,
+            kind: target.kind,
+            required_role: target.requiredRole
+        })
+    })
+
+    const remove = currentStatuses
+        .filter((status: any) => ![
+            String(protectedOpenStatus?.id || ''),
+            String(protectedTrackedStatus?.id || ''),
+            String(protectedVerifiedStatus?.id || '')
+        ].includes(String(status?.id || '')))
+        .map((status: any) => String(status?.id || '').trim())
+        .filter((id: string) => id && !claimedStatusIds.has(id))
+    if (create.length > 0 || update.length > 0 || remove.length > 0) {
+        await fieldwire.batchProjectStatuses(projectId, { create, update, delete: remove })
+    }
+
+    const appliedStatuses = normalizeArray(await fieldwire.statuses(projectId) as any)
+    const generalStatus = appliedStatuses.find((status: any) => normalizeLookupKey(status?.name) === 'general')
+    if (!generalStatus?.id) {
+        throw new Error('Fieldwire did not return the configured General status after provisioning.')
+    }
+    const missingNames = desiredNames.filter((desiredName) =>
+        !appliedStatuses.some((status: any) => normalizeLookupKey(status?.name) === desiredName)
+    )
+    if (missingNames.length > 0) {
+        throw new Error(`Fieldwire did not return every configured status: ${missingNames.join(', ')}.`)
+    }
+    return generalStatus
+}
+
+function getFieldwireStatusConfigurationError(
+    division: FirewireProjectRecord['projectType'],
+    definitions: FirewireProjectSettingRecord[]
+): string {
+    if (definitions.length === 0) {
+        return `No active Fieldwire statuses are configured for ${division}.`
+    }
+    const desiredNames = definitions.map((item) => normalizeLookupKey(item.label))
+    if (desiredNames.some((name) => !name)) {
+        return `${division} Fieldwire status captions cannot be blank.`
+    }
+    if (new Set(desiredNames).size !== desiredNames.length) {
+        return `${division} Fieldwire status captions must be unique.`
+    }
+    if (!desiredNames.includes('general')) {
+        return `${division} Fieldwire statuses must include an active status named General.`
+    }
+    const invalidType = definitions.find((item) => item.statusKind !== 'open' && item.statusKind !== 'tracked' && item.statusKind !== 'verified')
+    if (invalidType) {
+        return `${division} Fieldwire status ${invalidType.label} must have a type of Open, Tracked, or Verified.`
+    }
+    const general = definitions.find((item) => normalizeLookupKey(item.label) === 'general')
+    if (general?.statusKind !== 'open') {
+        return `${division} Fieldwire status General must have type Open.`
+    }
+    const kindCounts = definitions.reduce((counts, item) => {
+        counts[item.statusKind] = (counts[item.statusKind] || 0) + 1
+        return counts
+    }, {} as Record<string, number>)
+    if (!kindCounts.open || !kindCounts.tracked || !kindCounts.verified) {
+        return `${division} Fieldwire statuses must include at least one Open, one Tracked, and one Verified status.`
+    }
+    if (kindCounts.verified !== 1) {
+        return `${division} Fieldwire statuses must include exactly one Verified status.`
+    }
+    const kindRank: Record<string, number> = { open: 0, tracked: 1, verified: 2 }
+    for (let index = 1; index < definitions.length; index += 1) {
+        if (kindRank[definitions[index].statusKind] < kindRank[definitions[index - 1].statusKind]) {
+            return `${division} Fieldwire statuses must be ordered with all Open statuses first, followed by Tracked, then Verified.`
+        }
+    }
+    return ''
+}
+
+async function loadFieldwireProjectUser(fieldwire: FieldwireSDK, projectId: string): Promise<any> {
     const users = normalizeArray(await fieldwire.accountProjectUsers(projectId) as any)
     const user = users.find((item: any) => item?.is_admin) || users[0]
     if (!user?.id) {
         throw new Error('No Fieldwire project user is available for task creation.')
     }
+    return user
+}
+
+async function loadFieldwireTaskContext(fieldwire: FieldwireSDK, projectId: string, projectUser?: any): Promise<any> {
+    const user = projectUser?.id ? projectUser : await loadFieldwireProjectUser(fieldwire, projectId)
     const statuses = normalizeArray(await fieldwire.statuses(projectId) as any)
-    const status = statuses.find((item: any) => item?.is_default)
-        || statuses.find((item: any) => normalizeLookupKey(item?.name).includes('open'))
-        || statuses[0]
+    const status = statuses.find((item: any) => normalizeLookupKey(item?.name) === 'general')
+    if (!status?.id) {
+        throw new Error('Fieldwire status General is required before task creation.')
+    }
     const teams = normalizeArray(await fieldwire.teams(projectId) as any)
     return {
         userId: String(user.id),
@@ -1437,7 +1692,6 @@ async function loadFieldwireTaskContext(fieldwire: FieldwireSDK, projectId: stri
 async function getOrCreateFieldwireTeam(fieldwire: FieldwireSDK, projectId: string, context: any, categoryName: string): Promise<any> {
     const normalizedCategoryName = String(categoryName || 'Firewire').trim() || 'Firewire'
     const match = context.teams.find((team: any) => normalizeLookupKey(team?.name) === normalizeLookupKey(normalizedCategoryName))
-        || context.teams[0]
     if (match?.id) {
         return match
     }
@@ -1553,9 +1807,41 @@ function getFirewireFloorplans(workspace: any): any[] {
         }))
 }
 
-function getFloorplanSymbols(file: any): any[] {
+function getFloorplanSymbols(file: any, project: FirewireProjectRecord): any[] {
+    const bomRowsById = new Map<string, any>()
+    const sections = Array.isArray(project?.worksheetData?.bomSections) ? project.worksheetData.bomSections : []
+    for (const section of sections) {
+        for (const row of Array.isArray(section?.rows) ? section.rows : []) {
+            const bomRowId = String(row?.id || row?.bomRowId || '').trim()
+            if (bomRowId) {
+                bomRowsById.set(bomRowId, row)
+            }
+        }
+    }
+
     return (Array.isArray(file?.floorplanDesign?.annotations) ? file.floorplanDesign.annotations : [])
         .filter((annotation: any) => annotation?.kind === 'symbol')
+        .map((annotation: any) => {
+            const explicitBomRowId = String(annotation?.bomRowId || '').trim()
+            const symbolId = String(annotation?.symbolId || '').trim()
+            const derivedBomRowId = symbolId.startsWith('bom-row-') ? symbolId.slice('bom-row-'.length) : ''
+            const bomRow = bomRowsById.get(explicitBomRowId || derivedBomRowId)
+            if (!bomRow) {
+                return annotation
+            }
+            const categoryName = String(bomRow?.type || '').trim()
+            const partNumber = String(bomRow?.partNbr || '').trim()
+            const deviceName = String(bomRow?.description || partNumber || categoryName).trim()
+            return {
+                ...annotation,
+                bomRowId: explicitBomRowId || derivedBomRowId,
+                categoryName: categoryName || annotation.categoryName || '',
+                partNumber: partNumber || annotation.partNumber || '',
+                deviceName: deviceName || annotation.deviceName || '',
+                materialCost: toFiniteNumber(bomRow?.cost) || 0,
+                laborHours: toFiniteNumber(bomRow?.labor) || 0
+            }
+        })
 }
 
 function latestFileVersion(file: any): any | null {

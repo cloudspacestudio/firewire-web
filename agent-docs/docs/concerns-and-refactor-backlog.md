@@ -48,6 +48,10 @@ This is a living list of drift, risks, and consolidation opportunities. It is no
 
    These pages share core estimating concepts but still mix common components with page-local logic. Floorplans now use shared folder-capable UI, and Sales Quick Start uses `FirewireEstimateSummaryComponent`, but Project Detail still owns a large local summary implementation. Changes to BOMs, floorplans, customer info, summary/pricing, or quote/report output should update both pages in the same pass or extract the behavior into a shared component/service.
 
+12. Floorplan scale discovery lacks a focused pass.
+
+   Floorplan Designer currently asks the whole-sheet diagnostic response for scale candidates while its enlarged overlapping-tile pass searches only for device symbols. Small printed scales and graphic rulers can therefore be human-readable when zoomed but absent or below the endpoint/confidence requirements in AI output. A future focused scale pass should search enlarged plan-title and title-block crops, preserve the canonical rendered-page coordinate system, account for saved manual 90/270-degree designer rotation, and safely derive calibration from trustworthy printed-scale notation when no graphic ruler endpoints are available.
+
 ## Suggested Consolidation Sequence
 
 1. Agent documentation and architectural memory.

@@ -59,6 +59,7 @@ type DocumentLibraryFile = {
     updatedAt?: string
     floorplanDesign?: any
     sourceAnalysisId?: string
+    sourceProposalId?: string
     sourceDocumentId?: string
     sourceDocumentVersionId?: string
     versions?: DocumentLibraryVersion[]
@@ -205,20 +206,16 @@ export class FirewireDocumentAnalysisData {
                     }
 
                     const currentRecord = record.status === 'completed' && record.result
-                        ? {
+                        ? FirewireDocumentAnalysisData.annotateRecordFloorplanMatches({
                             ...record,
                             result: {
                                 ...record.result,
                                 proposedBomActions: FirewireDocumentAnalysisData.annotateProjectBomMatches(
                                     record.result.proposedBomActions || [],
                                     context.project.worksheetData
-                                ),
-                                proposedFloorplanActions: FirewireDocumentAnalysisData.annotateFloorplanMatches(
-                                    record.result.proposedFloorplanActions || [],
-                                    await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
                                 )
                             }
-                        }
+                        }, await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey))
                         : record
                     return res.status(200).json({ data: FirewireDocumentAnalysisData.toClientRecord(currentRecord) })
                 } catch (err: Error | any) {
@@ -914,7 +911,12 @@ export class FirewireDocumentAnalysisData {
                         return res.status(200).json({ data: { record: FirewireDocumentAnalysisData.toClientRecord(record), application: priorApplication, file: priorFile, workspace: payload, alreadyApplied: true } })
                     }
 
-                    const [evaluated] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
+                    const [evaluated] = FirewireDocumentAnalysisData.annotateFloorplanMatches(
+                        [proposal],
+                        payload,
+                        record.floorplanApplications || [],
+                        record.floorplanPlacementApplications || []
+                    )
                     if (evaluated.floorplanMatch?.status === 'ALREADY_EXISTS') {
                         return res.status(409).json({
                             message: `${proposal.name} already exists in this project's floorplans.`,
@@ -964,6 +966,7 @@ export class FirewireDocumentAnalysisData {
                         createdAt: now,
                         updatedAt: now,
                         sourceAnalysisId: record.id,
+                        sourceProposalId: proposalId,
                         sourceDocumentId: record.documentId,
                         sourceDocumentVersionId: record.versionId,
                         floorplanDesign: { annotations: [], rotationDegrees: 0, symbolDisplayMode: 'icon', updatedAt: now },
@@ -1048,7 +1051,12 @@ export class FirewireDocumentAnalysisData {
 
                     const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
                     const floorplanApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
-                    const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
+                    const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches(
+                        [proposal],
+                        payload,
+                        record.floorplanApplications || [],
+                        record.floorplanPlacementApplications || []
+                    )
                     const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
                     const appliedFloorplanFileId = files.some((file) => String(file.id || '') === floorplanApplication?.floorplanFileId)
                         ? floorplanApplication?.floorplanFileId || ''
@@ -1155,7 +1163,9 @@ export class FirewireDocumentAnalysisData {
                     await FirewireDocumentAnalysisData.saveAnalysisRecord(context.sqldb, updatedRecord, userId)
                     return res.status(200).json({
                         data: {
-                            record: FirewireDocumentAnalysisData.toClientRecord(updatedRecord),
+                            record: FirewireDocumentAnalysisData.toClientRecord(
+                                FirewireDocumentAnalysisData.annotateRecordFloorplanMatches(updatedRecord, nextPayload)
+                            ),
                             proposal: updatedProposal,
                             placements: normalizedPlacements,
                             removedAnnotationCount,
@@ -1188,7 +1198,12 @@ export class FirewireDocumentAnalysisData {
                     if (!proposal) return res.status(404).json({ message: 'The stored floorplan proposal was not found.' })
                     const payload = await FirewireDocumentAnalysisData.loadDocumentLibraryPayload(context.sqldb, context.workspaceKey)
                     const floorplanApplication = (record.floorplanApplications || []).find((item) => item.proposalId === proposalId)
-                    const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches([proposal], payload)
+                    const [evaluatedProposal] = FirewireDocumentAnalysisData.annotateFloorplanMatches(
+                        [proposal],
+                        payload,
+                        record.floorplanApplications || [],
+                        record.floorplanPlacementApplications || []
+                    )
                     const files: DocumentLibraryFile[] = Array.isArray(payload.files) ? payload.files : []
                     const appliedFloorplanFileId = files.some((file) => String(file.id || '') === floorplanApplication?.floorplanFileId)
                         ? floorplanApplication?.floorplanFileId || ''
@@ -1200,6 +1215,7 @@ export class FirewireDocumentAnalysisData {
                     if (!floorplan) return res.status(409).json({ message: 'The target floorplan is no longer available.' })
                     const latestProject = await new FirewireProjectRepository(req.app).getFirewireProject(context.project.uuid)
                     if (!latestProject) return res.status(404).json({ message: 'Project not found.' })
+                    const worksheetData = FirewireDocumentAnalysisData.cloneJson(latestProject.worksheetData || {})
 
                     const priorApplications = (record.floorplanPlacementApplications || [])
                         .filter((application) => application.proposalId === proposalId)
@@ -1218,6 +1234,7 @@ export class FirewireDocumentAnalysisData {
                     const recoveredAnnotationIds: string[] = []
                     const recoveredPlacementIds: string[] = []
                     const skipped: Array<{ placementId: string, reason: string }> = []
+                    const affectedBomRowIds = new Set<string>()
 
                     for (const placement of proposal.symbolPlacements || []) {
                         const priorAnnotationId = priorAnnotationIdByPlacement.get(placement.placementId)
@@ -1228,6 +1245,8 @@ export class FirewireDocumentAnalysisData {
                             if (existingAnnotation && !priorPlacementIds.has(placement.placementId)) {
                                 recoveredPlacementIds.push(placement.placementId)
                                 recoveredAnnotationIds.push(String(existingAnnotation.id || ''))
+                                const existingBomRowId = String(existingAnnotation.bomRowId || '')
+                                if (existingBomRowId) affectedBomRowIds.add(existingBomRowId)
                             }
                             skipped.push({ placementId: placement.placementId, reason: 'already placed' })
                             continue
@@ -1237,27 +1256,21 @@ export class FirewireDocumentAnalysisData {
                             skipped.push({ placementId: placement.placementId, reason: 'device match required' })
                             continue
                         }
-                        const [evaluated] = FirewireDocumentAnalysisData.annotateProjectBomMatches([bomProposal], latestProject.worksheetData)
+                        const [evaluated] = FirewireDocumentAnalysisData.annotateProjectBomMatches([bomProposal], worksheetData)
                         const bomRowId = evaluated.projectBomMatch?.bomRowId || ''
-                        const row = FirewireDocumentAnalysisData.findBomRow(latestProject.worksheetData, bomRowId)
+                        const row = FirewireDocumentAnalysisData.findBomRow(worksheetData, bomRowId)
                         if (!row || !row.includeOnFloorplan) {
                             skipped.push({ placementId: placement.placementId, reason: 'floorplan-ready BOM row required' })
-                            continue
-                        }
-                        const target = Math.max(0, Math.floor(Number(row.floorplanQuantityTarget ?? row.qty ?? 0)))
-                        const placedCount = allAnnotations.filter((item: any) => item?.kind === 'symbol' && String(item?.bomRowId || '') === bomRowId).length
-                            + annotationIds.filter((annotationId) => targetAnnotations.some((item: any) => item.id === annotationId && item.bomRowId === bomRowId)).length
-                        if (placedCount >= target) {
-                            skipped.push({ placementId: placement.placementId, reason: 'placement target reached' })
                             continue
                         }
                         const annotation = FirewireDocumentAnalysisData.createFloorplanAnnotation(row, placement, record)
                         targetAnnotations.push(annotation)
                         annotationIds.push(annotation.id)
                         placementIds.push(placement.placementId)
+                        affectedBomRowIds.add(bomRowId)
                     }
                     if (annotationIds.length === 0 && recoveredAnnotationIds.length === 0) {
-                        return res.status(409).json({ message: 'No symbols were eligible for placement. Apply matched device rows to the BOM first, or review placement targets.', skipped })
+                        return res.status(409).json({ message: 'No new symbols were eligible for placement. Apply exact, floorplan-ready device rows to the BOM first, or confirm that these locations were not already placed.', skipped })
                     }
                     const now = new Date().toISOString()
                     floorplan.floorplanDesign = { ...(floorplan.floorplanDesign || {}), annotations: targetAnnotations, updatedAt: now }
@@ -1265,6 +1278,51 @@ export class FirewireDocumentAnalysisData {
                     const userId = FirewireDocumentAnalysisData.resolveUserId(req)
                     const nextPayload = { ...payload, files }
                     await context.sqldb.saveWorkspaceStorage(DOCUMENT_LIBRARY_AREA, context.workspaceKey, JSON.stringify(nextPayload), userId)
+                    const placedCountByBomRowId = new Map<string, number>()
+                    for (const annotation of files.flatMap((file) => Array.isArray(file.floorplanDesign?.annotations) ? file.floorplanDesign.annotations : [])) {
+                        const bomRowId = String(annotation?.bomRowId || '')
+                        if (annotation?.kind !== 'symbol' || !bomRowId) continue
+                        placedCountByBomRowId.set(bomRowId, (placedCountByBomRowId.get(bomRowId) || 0) + 1)
+                    }
+                    const quantityAdjustments: Array<{
+                        bomRowId: string
+                        previousQuantity: number
+                        quantity: number
+                        previousPlacementTarget: number
+                        placementTarget: number
+                    }> = []
+                    for (const bomRowId of affectedBomRowIds) {
+                        const row = FirewireDocumentAnalysisData.findBomRow(worksheetData, bomRowId)
+                        if (!row) continue
+                        const placedCount = placedCountByBomRowId.get(bomRowId) || 0
+                        const previousQuantity = Math.max(0, Math.floor(Number(row.qty || 0)))
+                        const previousPlacementTarget = Math.max(0, Math.floor(Number(row.floorplanQuantityTarget || 0)))
+                        const quantity = Math.max(previousQuantity, placedCount)
+                        const placementTarget = Math.max(previousPlacementTarget, placedCount)
+                        if (quantity === previousQuantity && placementTarget === previousPlacementTarget) continue
+                        row.qty = quantity
+                        row.floorplanQuantityTarget = placementTarget
+                        quantityAdjustments.push({
+                            bomRowId,
+                            previousQuantity,
+                            quantity,
+                            previousPlacementTarget,
+                            placementTarget
+                        })
+                    }
+                    let updatedProject = latestProject
+                    if (quantityAdjustments.length > 0) {
+                        const projectInput = FirewireDocumentAnalysisData.createProjectUpdateInput(latestProject)
+                        projectInput.worksheetData = worksheetData
+                        const persistedProject = await new FirewireProjectRepository(req.app).updateFirewireProject(
+                            latestProject.uuid,
+                            projectInput,
+                            userId,
+                            `Placed ${annotationIds.length + recoveredAnnotationIds.length} reviewed AI floorplan symbol${annotationIds.length + recoveredAnnotationIds.length === 1 ? '' : 's'} and raised ${quantityAdjustments.length} BOM placement target${quantityAdjustments.length === 1 ? '' : 's'} to the discovered counts.`
+                        )
+                        if (!persistedProject) return res.status(404).json({ message: 'Project not found while reconciling discovered symbol quantities.' })
+                        updatedProject = persistedProject
+                    }
                     const application: DocumentAnalysisFloorplanPlacementApplication = {
                         id: `floorplan-placement-${randomUUID()}`,
                         appliedAt: now,
@@ -1287,7 +1345,21 @@ export class FirewireDocumentAnalysisData {
                             message: storageError instanceof Error ? storageError.message : String(storageError || '')
                         })
                     }
-                    return res.status(200).json({ data: { record: FirewireDocumentAnalysisData.toClientRecord(updatedRecord), application, applicationRecorded, alreadyApplied: annotationIds.length === 0, file: floorplan, workspace: nextPayload, skipped } })
+                    return res.status(200).json({
+                        data: {
+                            record: FirewireDocumentAnalysisData.toClientRecord(
+                                FirewireDocumentAnalysisData.annotateRecordFloorplanMatches(updatedRecord, nextPayload)
+                            ),
+                            application,
+                            applicationRecorded,
+                            alreadyApplied: annotationIds.length === 0,
+                            file: floorplan,
+                            workspace: nextPayload,
+                            project: updatedProject,
+                            quantityAdjustments,
+                            skipped
+                        }
+                    })
                 } catch (err: Error | any) {
                     const statusCode = err instanceof DocumentAnalysisInputError ? err.statusCode : 500
                     return res.status(statusCode).json({ message: FirewireDocumentAnalysisData.getSafeErrorMessage(err) })
@@ -1772,22 +1844,60 @@ export class FirewireDocumentAnalysisData {
             && !!item.result) || null
     }
 
-    private static annotateFloorplanMatches(proposals: DocumentAnalysisFloorplanProposal[], payload: any): DocumentAnalysisFloorplanProposal[] {
+    private static annotateRecordFloorplanMatches(record: DocumentAnalysisRecord, payload: any): DocumentAnalysisRecord {
+        if (!record.result) return record
+        return {
+            ...record,
+            result: {
+                ...record.result,
+                proposedFloorplanActions: FirewireDocumentAnalysisData.annotateFloorplanMatches(
+                    record.result.proposedFloorplanActions || [],
+                    payload,
+                    record.floorplanApplications || [],
+                    record.floorplanPlacementApplications || []
+                )
+            }
+        }
+    }
+
+    private static annotateFloorplanMatches(
+        proposals: DocumentAnalysisFloorplanProposal[],
+        payload: any,
+        floorplanApplications: DocumentAnalysisFloorplanApplication[] = [],
+        placementApplications: DocumentAnalysisFloorplanPlacementApplication[] = []
+    ): DocumentAnalysisFloorplanProposal[] {
         const files: DocumentLibraryFile[] = Array.isArray(payload?.files) ? payload.files : []
         const floorplans = files.filter((file) => String(file.folderId || '') === 'floorplans')
         return proposals.map((proposal) => {
+            const createdApplication = floorplanApplications.find((item) => item.proposalId === proposal.proposalId)
+            const placementApplication = placementApplications.find((item) => item.proposalId === proposal.proposalId)
+            const createdFile = createdApplication
+                ? floorplans.find((file) => String(file.id || '') === createdApplication.floorplanFileId)
+                : undefined
+            const placedFile = placementApplication
+                ? floorplans.find((file) => String(file.id || '') === placementApplication.floorplanFileId)
+                : undefined
+            const provenanceFile = floorplans.find((file) => String(file.sourceProposalId || '') === proposal.proposalId)
             const key = FirewireDocumentAnalysisData.normalizeFloorplanName(proposal.name)
-            const existing = floorplans.find((file) => {
+            const nameMatchedFile = floorplans.find((file) => {
                 const names = [file.name, file.sourceFileName, ...(file.versions || []).map((version) => version.sourceFileName)]
                 return names.some((name) => FirewireDocumentAnalysisData.normalizeFloorplanName(name) === key)
             })
+            const existing = createdFile || placedFile || provenanceFile || nameMatchedFile
+            const rationale = createdFile
+                ? 'This inspection already created the project floorplan.'
+                : placedFile
+                    ? 'This inspection already placed symbols on the project floorplan.'
+                    : provenanceFile
+                        ? 'The project floorplan is linked to this inspection proposal.'
+                        : 'A project floorplan with the same normalized drawing name already exists.'
             return {
                 ...proposal,
                 floorplanMatch: existing
                     ? {
-                        status: 'ALREADY_EXISTS',
+                        status: createdFile ? 'CREATED' : 'ALREADY_EXISTS',
                         floorplanFileId: String(existing.id || ''),
-                        rationale: 'A project floorplan with the same normalized drawing name already exists.'
+                        rationale
                     }
                     : {
                         status: 'MISSING',

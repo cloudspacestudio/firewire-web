@@ -3,11 +3,13 @@ import * as mssql from 'mssql'
 import { v4 as uuidv4, validate as validateUuid } from 'uuid'
 import { MsSqlServerDb } from '../../../core/databases/mssqldb'
 
-export type FirewireProjectSettingListKey = 'jobType' | 'scopeType' | 'projectScope' | 'difficulty' | 'projectStatus' | 'assumptions' | 'inclusions' | 'exclusions'
+export type FirewireProjectSettingListKey = 'jobType' | 'scopeType' | 'projectScope' | 'difficulty' | 'projectStatus' | 'assumptions' | 'inclusions' | 'exclusions' | 'fieldwireStatuses'
 export type FirewireProjectSettingDivision = 'Fire Alarm' | 'Sprinkler' | 'Security'
+export type FirewireStatusKind = 'open' | 'tracked' | 'verified'
 
-const DIVISION_SPECIFIC_LIST_KEYS: FirewireProjectSettingListKey[] = ['assumptions', 'inclusions', 'exclusions']
+const DIVISION_SPECIFIC_LIST_KEYS: FirewireProjectSettingListKey[] = ['assumptions', 'inclusions', 'exclusions', 'fieldwireStatuses']
 const FIREWIRE_DIVISIONS: FirewireProjectSettingDivision[] = ['Fire Alarm', 'Sprinkler', 'Security']
+export const FIELDWIRE_STATUS_COLORS = ['#FD504E', '#C91112', '#FA8B34', '#FCD44A', '#45DE67', '#12A258', '#82D8FF', '#306BDB', '#F84EF8', '#282828'] as const
 
 export interface FirewireProjectSettingRecord {
     uuid: string
@@ -15,6 +17,8 @@ export interface FirewireProjectSettingRecord {
     division: FirewireProjectSettingDivision | null
     label: string
     description: string
+    color: string
+    statusKind: FirewireStatusKind | ''
     sortOrder: number
     isActive: boolean
     createdAt: string
@@ -28,6 +32,8 @@ export interface FirewireProjectSettingInput {
     division?: FirewireProjectSettingDivision | null
     label: string
     description?: string | null
+    color?: string | null
+    statusKind?: string | null
     sortOrder?: number | null
     isActive?: boolean | null
 }
@@ -38,6 +44,8 @@ type SqlProjectSettingRow = {
     division: FirewireProjectSettingDivision | null
     label: string
     description: string
+    color: string
+    statusKind: string
     sortOrder: number
     isActive: boolean
     createdAt: Date | string
@@ -114,6 +122,8 @@ export class FirewireProjectSettingsRepository {
             '    division,',
             '    label,',
             '    description,',
+            '    color,',
+            '    statusKind,',
             '    sortOrder,',
             '    isActive,',
             '    createdAt,',
@@ -133,7 +143,8 @@ export class FirewireProjectSettingsRepository {
             projectStatus: rows.filter((row) => row.listKey === 'projectStatus'),
             assumptions: rows.filter((row) => row.listKey === 'assumptions'),
             inclusions: rows.filter((row) => row.listKey === 'inclusions'),
-            exclusions: rows.filter((row) => row.listKey === 'exclusions')
+            exclusions: rows.filter((row) => row.listKey === 'exclusions'),
+            fieldwireStatuses: rows.filter((row) => row.listKey === 'fieldwireStatuses')
         }
     }
 
@@ -144,9 +155,9 @@ export class FirewireProjectSettingsRepository {
         const pool = await this.getPool()
         const query = [
             'INSERT INTO dbo.firewireProjectSettings (',
-            '    uuid, listKey, division, label, description, sortOrder, isActive, createdBy, updatedBy',
+            '    uuid, listKey, division, label, description, color, statusKind, sortOrder, isActive, createdBy, updatedBy',
             ') VALUES (',
-            '    @uuid, @listKey, @division, @label, @description, @sortOrder, @isActive, @createdBy, @updatedBy',
+            '    @uuid, @listKey, @division, @label, @description, @color, @statusKind, @sortOrder, @isActive, @createdBy, @updatedBy',
             ');'
         ].join('\n')
         await pool.request()
@@ -155,6 +166,8 @@ export class FirewireProjectSettingsRepository {
             .input('division', mssql.NVarChar(50), normalized.division)
             .input('label', mssql.NVarChar(2000), normalized.label)
             .input('description', mssql.NVarChar(2000), normalized.description)
+            .input('color', mssql.NVarChar(20), normalized.color)
+            .input('statusKind', mssql.NVarChar(20), normalized.statusKind)
             .input('sortOrder', mssql.Int, normalized.sortOrder)
             .input('isActive', mssql.Bit, normalized.isActive)
             .input('createdBy', mssql.NVarChar(256), userId)
@@ -181,6 +194,8 @@ export class FirewireProjectSettingsRepository {
             '    division = @division,',
             '    label = @label,',
             '    description = @description,',
+            '    color = @color,',
+            '    statusKind = @statusKind,',
             '    sortOrder = @sortOrder,',
             '    isActive = @isActive,',
             '    updatedAt = SYSUTCDATETIME(),',
@@ -193,6 +208,8 @@ export class FirewireProjectSettingsRepository {
             .input('division', mssql.NVarChar(50), normalized.division)
             .input('label', mssql.NVarChar(2000), normalized.label)
             .input('description', mssql.NVarChar(2000), normalized.description)
+            .input('color', mssql.NVarChar(20), normalized.color)
+            .input('statusKind', mssql.NVarChar(20), normalized.statusKind)
             .input('sortOrder', mssql.Int, normalized.sortOrder)
             .input('isActive', mssql.Bit, normalized.isActive)
             .input('updatedBy', mssql.NVarChar(256), userId)
@@ -201,6 +218,53 @@ export class FirewireProjectSettingsRepository {
             return null
         }
         return this.getById(settingId)
+    }
+
+    async reorder(listKeyInput: unknown, divisionInput: unknown, itemIdsInput: unknown, userId: string): Promise<void> {
+        await this.ensureTable()
+        const listKey = this.normalizeListKey(listKeyInput)
+        const division = this.normalizeDivision(divisionInput, listKey)
+        const itemIds = Array.isArray(itemIdsInput)
+            ? itemIdsInput.map((value) => String(value || '').trim()).filter((value) => validateUuid(value))
+            : []
+        if (itemIds.length === 0 || new Set(itemIds).size !== itemIds.length) {
+            throw new Error('Invalid reorder itemIds.')
+        }
+
+        const pool = await this.getPool()
+        const existing = await pool.request()
+            .input('listKey', mssql.NVarChar(50), listKey)
+            .input('division', mssql.NVarChar(50), division)
+            .query([
+                'SELECT uuid FROM dbo.firewireProjectSettings',
+                'WHERE listKey = @listKey',
+                '  AND ((@division IS NULL AND division IS NULL) OR division = @division);'
+            ].join('\n'))
+        const existingIds = (existing.recordset || []).map((row) => String(row.uuid).toLowerCase())
+        const requestedIds = itemIds.map((value) => value.toLowerCase())
+        if (existingIds.length !== requestedIds.length || existingIds.some((value) => !requestedIds.includes(value))) {
+            throw new Error('Invalid reorder itemIds for list and division.')
+        }
+
+        const transaction = new mssql.Transaction(pool)
+        await transaction.begin()
+        try {
+            for (let index = 0; index < itemIds.length; index += 1) {
+                await new mssql.Request(transaction)
+                    .input('uuid', mssql.UniqueIdentifier, itemIds[index])
+                    .input('sortOrder', mssql.Int, (index + 1) * 10)
+                    .input('updatedBy', mssql.NVarChar(256), userId)
+                    .query([
+                        'UPDATE dbo.firewireProjectSettings',
+                        'SET sortOrder = @sortOrder, updatedAt = SYSUTCDATETIME(), updatedBy = @updatedBy',
+                        'WHERE uuid = @uuid;'
+                    ].join('\n'))
+            }
+            await transaction.commit()
+        } catch (err) {
+            await transaction.rollback()
+            throw err
+        }
     }
 
     async remove(settingId: string): Promise<boolean> {
@@ -226,6 +290,8 @@ export class FirewireProjectSettingsRepository {
             '        division NVARCHAR(50) NULL,',
             '        label NVARCHAR(2000) NOT NULL,',
             "        description NVARCHAR(2000) NOT NULL CONSTRAINT DF_firewireProjectSettings_description DEFAULT N'',",
+            "        color NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_color DEFAULT N'',",
+            "        statusKind NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_statusKind DEFAULT N'',",
             '        sortOrder INT NOT NULL CONSTRAINT DF_firewireProjectSettings_sortOrder DEFAULT 0,',
             '        isActive BIT NOT NULL CONSTRAINT DF_firewireProjectSettings_isActive DEFAULT 1,',
             '        createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectSettings_createdAt DEFAULT SYSUTCDATETIME(),',
@@ -243,8 +309,8 @@ export class FirewireProjectSettingsRepository {
                 '    SELECT 1 FROM dbo.firewireProjectSettings WHERE listKey = @listKey AND label = @label',
                 ')',
                 'BEGIN',
-                '    INSERT INTO dbo.firewireProjectSettings (uuid, listKey, division, label, description, sortOrder, isActive, createdBy, updatedBy)',
-                '    VALUES (@uuid, @listKey, NULL, @label, @description, @sortOrder, 1, @createdBy, @updatedBy);',
+                '    INSERT INTO dbo.firewireProjectSettings (uuid, listKey, division, label, description, color, statusKind, sortOrder, isActive, createdBy, updatedBy)',
+                "    VALUES (@uuid, @listKey, NULL, @label, @description, N'', N'', @sortOrder, 1, @createdBy, @updatedBy);",
                 'END;'
             ].join('\n')
             await pool.request()
@@ -265,7 +331,7 @@ export class FirewireProjectSettingsRepository {
             .input('uuid', mssql.UniqueIdentifier, settingId)
             .query([
                 'SELECT',
-                '    uuid, listKey, division, label, description, sortOrder, isActive, createdAt, createdBy, updatedAt, updatedBy',
+                '    uuid, listKey, division, label, description, color, statusKind, sortOrder, isActive, createdAt, createdBy, updatedAt, updatedBy',
                 'FROM dbo.firewireProjectSettings',
                 'WHERE uuid = @uuid;'
             ].join('\n'))
@@ -287,6 +353,14 @@ export class FirewireProjectSettingsRepository {
             'BEGIN',
             '    ALTER TABLE dbo.firewireProjectSettings ADD division NVARCHAR(50) NULL;',
             'END;',
+            "IF COL_LENGTH(N'dbo.firewireProjectSettings', N'color') IS NULL",
+            'BEGIN',
+            "    ALTER TABLE dbo.firewireProjectSettings ADD color NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_color DEFAULT N'';",
+            'END;',
+            "IF COL_LENGTH(N'dbo.firewireProjectSettings', N'statusKind') IS NULL",
+            'BEGIN',
+            "    ALTER TABLE dbo.firewireProjectSettings ADD statusKind NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_statusKind DEFAULT N'';",
+            'END;',
             "IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_firewireProjectSettings_list_label' AND object_id = OBJECT_ID(N'dbo.firewireProjectSettings'))",
             'BEGIN',
             '    DROP INDEX UX_firewireProjectSettings_list_label ON dbo.firewireProjectSettings;',
@@ -297,11 +371,13 @@ export class FirewireProjectSettingsRepository {
         await pool.request().batch(schemaQuery)
     }
 
-    private normalizeInput(input: FirewireProjectSettingInput, allowInactiveDefault: boolean): FirewireProjectSettingInput & { division: FirewireProjectSettingDivision | null; description: string; sortOrder: number; isActive: boolean } {
+    private normalizeInput(input: FirewireProjectSettingInput, allowInactiveDefault: boolean): FirewireProjectSettingInput & { division: FirewireProjectSettingDivision | null; description: string; color: string; statusKind: FirewireStatusKind | ''; sortOrder: number; isActive: boolean } {
         const listKey = this.normalizeListKey(input?.listKey)
         const division = this.normalizeDivision(input?.division, listKey)
         const label = this.requireString(input?.label, 'label', 2000)
         const description = this.optionalString(input?.description, 2000)
+        const color = this.normalizeColor(input?.color, listKey)
+        const statusKind = this.normalizeStatusKind(input?.statusKind, listKey)
         const sortOrder = this.normalizeSortOrder(input?.sortOrder)
         const isActive = typeof input?.isActive === 'boolean' ? input.isActive : allowInactiveDefault ? true : true
         return {
@@ -309,6 +385,8 @@ export class FirewireProjectSettingsRepository {
             division,
             label,
             description,
+            color,
+            statusKind,
             sortOrder,
             isActive
         }
@@ -324,6 +402,7 @@ export class FirewireProjectSettingsRepository {
             || input === 'assumptions'
             || input === 'inclusions'
             || input === 'exclusions'
+            || input === 'fieldwireStatuses'
         ) {
             return input
         }
@@ -348,6 +427,24 @@ export class FirewireProjectSettingsRepository {
         return Math.trunc(value)
     }
 
+    private normalizeColor(input: unknown, listKey: FirewireProjectSettingListKey): string {
+        if (listKey !== 'fieldwireStatuses') return ''
+        const color = String(input || '').trim().toUpperCase() || '#306BDB'
+        if (!FIELDWIRE_STATUS_COLORS.includes(color as typeof FIELDWIRE_STATUS_COLORS[number])) {
+            throw new Error('Invalid Fieldwire status color.')
+        }
+        return color
+    }
+
+    private normalizeStatusKind(input: unknown, listKey: FirewireProjectSettingListKey): FirewireStatusKind | '' {
+        if (listKey !== 'fieldwireStatuses') return ''
+        const statusKind = String(input || '').trim().toLowerCase()
+        if (statusKind === 'open' || statusKind === 'tracked' || statusKind === 'verified') {
+            return statusKind
+        }
+        throw new Error('Invalid Fieldwire status type. Choose Open, Tracked, or Verified.')
+    }
+
     private requireString(input: unknown, fieldName: string, maxLength: number): string {
         const value = this.optionalString(input, maxLength)
         if (!value) {
@@ -370,6 +467,8 @@ export class FirewireProjectSettingsRepository {
             division: row.division || null,
             label: row.label,
             description: row.description || '',
+            color: row.color || '',
+            statusKind: row.statusKind === 'open' || row.statusKind === 'tracked' || row.statusKind === 'verified' ? row.statusKind : '',
             sortOrder: Number(row.sortOrder || 0),
             isActive: !!row.isActive,
             createdAt: this.toIso(row.createdAt) || '',

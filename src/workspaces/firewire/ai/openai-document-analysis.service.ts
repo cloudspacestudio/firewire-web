@@ -930,6 +930,7 @@ export class OpenAiDocumentAnalysisService {
                     'Locate the exact printed legend glyph artwork for each supplied Firewire BOM proposal in this PDF.',
                     `Use ${JSON.stringify(input.filename)} in every source.filename field.`,
                     'Inspect every symbol, device, equipment, annunciation, and abbreviation legend row by row across every page.',
+                    'A general symbol/device legend may define glyphs used by floorplans on other pages. Match candidates across the complete document; do not require a candidate source page to equal the legend page unless the legend explicitly limits itself to a sheet, level, sector, or area.',
                     'Match each candidate to the printed legend row primarily by device type, row description, manufacturer, model, and part number. Do not substitute a similar neighboring legend row.',
                     'The supplied symbolLabel came from a broad document pass and may be wrong. Treat it only as a hint. A visibly printed glyph in the correctly described legend row is authoritative even when its letters differ from symbolLabel.',
                     'The device icon is the complete artwork shown in the first SYMBOL column for the matched row. Boxed text is valid artwork: for example, a red rectangle enclosing FACP is the Fire Alarm Control Panel glyph, and a red square enclosing F is the Manual Pull Station glyph.',
@@ -1300,6 +1301,14 @@ export class OpenAiDocumentAnalysisService {
                 })
                 const headings = textItems.flatMap((item) => {
                 if (!/\b(symbols|legend)\b/.test(item.normalized)) return []
+                // A drawing-wide device legend is often titled only "SYMBOL LEGEND".
+                // Accept that exact semantic heading without requiring the discipline on
+                // the same line, while excluding wire/riser/hatch keys that cannot supply
+                // reusable device glyphs.
+                if (/\b(wire|wiring|circuit|riser|hatch|line|cable|conduit|color)\b/.test(item.normalized)) return []
+                if (/\b(symbol legend|legend of symbols|symbol schedule|device legend|equipment legend)\b/.test(item.normalized)) {
+                    return [item]
+                }
                 if (/\b(fire|alarm|device|equipment|sprinkler|security)\b/.test(item.normalized)) {
                     return [item]
                 }
@@ -1317,7 +1326,10 @@ export class OpenAiDocumentAnalysisService {
                 return [{ ...item, x: left, y: top, width: right - left, height: bottom - top }]
                 })
                 const regions = headings.length > 0
-                    ? headings.slice(0, 4).map((heading) => this.getLegendTableRegion(heading, textItems, viewport.width, viewport.height))
+                    ? headings.slice(0, 4).flatMap((heading) => this.splitDenseLegendRegion(
+                        this.getLegendTableRegion(heading, textItems, viewport.width, viewport.height),
+                        viewport.height
+                    ))
                     : [{ x: 0, y: 0, width: viewport.width, height: viewport.height }]
                 for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
                     const region = regions[regionIndex]
@@ -1348,15 +1360,30 @@ export class OpenAiDocumentAnalysisService {
 
     private getLegendTableRegion(
         heading: { x: number, y: number, width: number, height: number },
-        items: Array<{ x: number, y: number, width: number, height: number }>,
+        items: Array<{ x: number, y: number, width: number, height: number, normalized?: string }>,
         pageWidth: number,
         pageHeight: number
     ): { x: number, y: number, width: number, height: number } {
         // Legend titles are commonly centered over a table substantially wider than the
         // heading text. The wider seed is required to retain the complete first SYMBOL
         // column; a title-width crop can cut the left side from boxed labels such as LCD.
-        const initialLeft = Math.max(0, heading.x - Math.max(heading.width * 0.32, pageWidth * 0.02))
-        const initialRight = Math.min(pageWidth, heading.x + heading.width + Math.max(heading.width * 0.32, pageWidth * 0.02))
+        const columnHeaders = items
+            .filter((item) => item.y >= heading.y - (heading.height * 0.5))
+            .filter((item) => item.y <= heading.y + Math.max(pageHeight * 0.09, heading.height * 8))
+            .filter((item) => {
+                const headingCenter = heading.x + (heading.width / 2)
+                return item.x + item.width >= headingCenter - (pageWidth * 0.24)
+                    && item.x <= headingCenter + (pageWidth * 0.24)
+            })
+            .filter((item) => /\b(symbol|part|number|description|model|manufacturer|back box|mounting|height|quantity|qty)\b/.test(item.normalized || ''))
+        const hasSymbolColumnHeader = columnHeaders.some((item) => /\bsymbol\b/.test(item.normalized || ''))
+        const useColumnHeaderBounds = hasSymbolColumnHeader && columnHeaders.length >= 3
+        const initialLeft = useColumnHeaderBounds
+            ? Math.max(0, Math.min(...columnHeaders.map((item) => item.x)) - (pageWidth * 0.01))
+            : Math.max(0, heading.x - Math.max(heading.width * 0.45, pageWidth * 0.04))
+        const initialRight = useColumnHeaderBounds
+            ? Math.min(pageWidth, Math.max(...columnHeaders.map((item) => item.x + item.width)) + (pageWidth * 0.01))
+            : Math.min(pageWidth, heading.x + heading.width + Math.max(heading.width * 0.45, pageWidth * 0.04))
         const candidateItems = items
             .filter((item) => item.y >= heading.y - (heading.height * 1.5))
             .filter((item) => item.y <= Math.min(pageHeight, heading.y + (pageHeight * 0.55)))
@@ -1374,11 +1401,34 @@ export class OpenAiDocumentAnalysisService {
             previousY = y
         }
         const tableItems = candidateItems.filter((item) => item.y <= tableBottom)
-        const minX = Math.max(0, Math.min(initialLeft, ...tableItems.map((item) => item.x)) - (pageWidth * 0.012))
-        const maxX = Math.min(pageWidth, Math.max(initialRight, ...tableItems.map((item) => item.x + item.width)) + (pageWidth * 0.012))
+        const minX = useColumnHeaderBounds
+            ? initialLeft
+            : Math.max(0, Math.min(initialLeft, ...tableItems.map((item) => item.x)) - (pageWidth * 0.012))
+        const maxX = useColumnHeaderBounds
+            ? initialRight
+            : Math.min(pageWidth, Math.max(initialRight, ...tableItems.map((item) => item.x + item.width)) + (pageWidth * 0.012))
         const top = Math.max(0, heading.y - Math.max(heading.height * 1.5, pageHeight * 0.01))
         const bottom = Math.min(pageHeight, tableBottom + Math.max(heading.height * 2, pageHeight * 0.015))
         return { x: minX, y: top, width: Math.max(1, maxX - minX), height: Math.max(1, bottom - top) }
+    }
+
+    private splitDenseLegendRegion(
+        region: { x: number, y: number, width: number, height: number },
+        pageHeight: number
+    ): Array<{ x: number, y: number, width: number, height: number }> {
+        const maximumBandHeight = pageHeight * 0.24
+        if (region.height <= maximumBandHeight * 1.2) return [region]
+
+        const overlap = pageHeight * 0.018
+        const step = maximumBandHeight - overlap
+        const bottom = region.y + region.height
+        const bands: Array<{ x: number, y: number, width: number, height: number }> = []
+        for (let top = region.y; top < bottom; top += step) {
+            const height = Math.min(maximumBandHeight, bottom - top)
+            bands.push({ x: region.x, y: top, width: region.width, height })
+            if (top + height >= bottom) break
+        }
+        return bands
     }
 
     private isInvalidReportScopeProposal(
@@ -1715,6 +1765,7 @@ export class OpenAiDocumentAnalysisService {
             'proposedBomActions extracts device candidates and quantities for later human review. Do not claim a BOM row was created.',
             'Create a BOM proposal when the document provides a positive schedule quantity, a positive drawing symbol count, or a distinct device entry in a symbol/device legend. Do not omit a legend device merely because its plan quantity cannot yet be counted.',
             'Inspect every symbol, device, equipment, and annunciation legend exhaustively, row by row. Capture the printed symbol label, description, manufacturer, model, part number, and source location separately. Ignore wire-only line types, room labels, drafting marks, and non-device abbreviations.',
+            'Treat a general symbol/device legend as a document-wide reference for every proposed floorplan unless the document explicitly limits that legend to a particular sheet, level, sector, or area.',
             'For each BOM proposal, populate legendSymbol from the actual example glyph printed in the legend. Coordinates are a tight bounding rectangle around only the glyph artwork, normalized from 0 to 1 across the full PDF page from top-left. Do not include the row description, quantity, part number, or neighboring legend marks. Set found false, pageNumber 0, all coordinates 0, and an empty source when no distinct legend glyph is visible.',
             'For a legend-only device with no reliable schedule or drawing count, set both quantity Found flags false and quantities 0, set quantityStatus UNKNOWN and reconciledQuantity 0, set floorplanSymbolFound true, and explain that it is legend-derived. The server will retain it as a reviewable provisional BOM candidate.',
             'Return at most one BOM proposal per unique device/equipment identity. Use whole-document totals when the same device appears on multiple plan pages.',

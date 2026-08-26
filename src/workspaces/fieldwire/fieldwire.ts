@@ -375,6 +375,20 @@ export class FieldwireSDK {
             }
         });
     }
+    public async batchProjectStatuses(projectId: string, input: {
+        create?: Array<{ project_id: string, creator_user_id: number, last_editor_user_id: number, name: string, ordinal: number, color: string, kind: 'open' | 'tracked' | 'verified', required_role: string }>
+        update?: Array<{ id: string, project_id: string, creator_user_id: number, last_editor_user_id: number, name: string, ordinal: number, color: string, kind: 'open' | 'tracked' | 'verified', required_role: string }>
+        delete?: string[]
+    }): Promise<ProjectStatusSchema[]> {
+        if (FieldwireSDK.editableProjects.indexOf(projectId) < 0) {
+            throw new Error(`Attempted to modify project ${projectId} which is not an editable project`)
+        }
+        return this.post(`projects/${projectId}/statuses/batch`, {
+            create: input.create || [],
+            update: input.update || [],
+            delete: input.delete || []
+        }, {})
+    }
     public async locations(projectId: string): Promise<AccountProjectSchema> {
         return new Promise(async (resolve, reject) => {
             try {

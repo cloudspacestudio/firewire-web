@@ -6,6 +6,8 @@ BEGIN
         division NVARCHAR(50) NULL,
         label NVARCHAR(2000) NOT NULL,
         description NVARCHAR(2000) NOT NULL CONSTRAINT DF_firewireProjectSettings_description DEFAULT N'',
+        color NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_color DEFAULT N'',
+        statusKind NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_statusKind DEFAULT N'',
         sortOrder INT NOT NULL CONSTRAINT DF_firewireProjectSettings_sortOrder DEFAULT 0,
         isActive BIT NOT NULL CONSTRAINT DF_firewireProjectSettings_isActive DEFAULT 1,
         createdAt DATETIME2(7) NOT NULL CONSTRAINT DF_firewireProjectSettings_createdAt DEFAULT SYSUTCDATETIME(),
@@ -15,9 +17,19 @@ BEGIN
     );
 END;
 
+IF COL_LENGTH(N'dbo.firewireProjectSettings', N'color') IS NULL
+BEGIN
+    ALTER TABLE dbo.firewireProjectSettings ADD color NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_color DEFAULT N'';
+END;
+
 IF COL_LENGTH(N'dbo.firewireProjectSettings', N'division') IS NULL
 BEGIN
     ALTER TABLE dbo.firewireProjectSettings ADD division NVARCHAR(50) NULL;
+END;
+
+IF COL_LENGTH(N'dbo.firewireProjectSettings', N'statusKind') IS NULL
+BEGIN
+    ALTER TABLE dbo.firewireProjectSettings ADD statusKind NVARCHAR(20) NOT NULL CONSTRAINT DF_firewireProjectSettings_statusKind DEFAULT N'';
 END;
 
 IF EXISTS (

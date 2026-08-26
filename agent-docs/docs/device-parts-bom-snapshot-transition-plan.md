@@ -113,11 +113,12 @@ Rules:
 - Once added, the BOM row is divorced from live `devices` and `parts` values.
 - Users may edit BOM row part number, description, cost, labor, category/type, and include-on-floorplan fields.
 - BOM rows selected directly from parts default `includeOnFloorplan=false`.
+- A user may explicitly promote a part-only BOM row into a reusable device through the shared Create Device From Part workflow. Replace the row's catalog snapshot in place rather than deleting and re-adding it: preserve its stable row id, quantity, placement target, document-analysis provenance, and floorplan annotations while changing `sourceKind`/`sourceDeviceId` to the created device and clearing the obsolete direct `sourcePartId`. If placements already reference the row, require the created device to remain floorplan-enabled.
 - Free-form BOM rows default `includeOnFloorplan=false`.
 - BOM rows created from devices default `includeOnFloorplan` from the device.
-- Document-analysis imports must preserve the approved BOM quantity and `floorplanQuantityTarget`; zero or partial placed-symbol counts must not overwrite either value.
+- Document-analysis imports must preserve the approved BOM quantity and `floorplanQuantityTarget`; zero or partial automated counts must not reduce either value. Explicit approval of reviewed AI-discovered placements may raise both values when the count is higher. A later explicit Floorplan Designer edit and save may raise or lower both values to the aggregate saved placement count.
 - Document-analysis BOM application is implemented for explicitly approved, exact device/master-part matches. Imported rows retain stable analysis/proposal/document provenance and idempotent application history; part-only rows are not floorplan-ready.
-- Floorplan placement progress is the count of annotations linked by stable `bomRowId`. Document-analysis placement now creates retry-safe, provenance-backed annotations at approved normalized locations and refuses to exceed `floorplanQuantityTarget`; automated placement is complete only when that count equals the target, unless the user explicitly changes it.
+- Floorplan placement progress is the count of annotations linked by stable `bomRowId`. Document-analysis placement creates retry-safe, provenance-backed annotations at approved normalized locations. The explicit `Place Symbols` approval may raise a provisional target to the aggregate discovered count. Manual Change Device and Remove operations preserve annotation identity where applicable, and Save Design reconciles the affected old/new BOM rows and document targets to aggregate saved counts.
 - BOM row money values should continue to follow the current whole-dollar BOM display/storage rule.
 
 ### bomRowParts

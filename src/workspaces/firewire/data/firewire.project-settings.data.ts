@@ -41,6 +41,23 @@ export class FirewireProjectSettingsData {
         },
         {
             method: 'patch',
+            path: '/api/firewire/project-settings/lists/:listKey/reorder',
+            fx: (req: express.Request, res: express.Response) => {
+                return new Promise(async() => {
+                    try {
+                        const userId = resolveUserId(req)
+                        const repository = new FirewireProjectSettingsRepository(req.app)
+                        await repository.reorder(req.params.listKey, req.body?.division, req.body?.itemIds, userId)
+                        return res.status(204).send()
+                    } catch (err: Error | any) {
+                        const statusCode = isValidationError(err) ? 400 : 500
+                        return res.status(statusCode).json({ message: err && err.message ? err.message : err })
+                    }
+                })
+            }
+        },
+        {
+            method: 'patch',
             path: '/api/firewire/project-settings/items/:itemId',
             fx: (req: express.Request, res: express.Response) => {
                 return new Promise(async() => {
@@ -95,6 +112,8 @@ function normalizePayload(body: any): FirewireProjectSettingInput {
         division: body?.division,
         label: body?.label,
         description: body?.description,
+        color: body?.color,
+        statusKind: body?.statusKind,
         sortOrder: body?.sortOrder,
         isActive: body?.isActive
     }

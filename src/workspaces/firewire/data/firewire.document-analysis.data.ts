@@ -158,7 +158,10 @@ export class FirewireDocumentAnalysisData {
                         context.version.id
                     )
                     const requestedAtMs = new Date(record.requestedAt).getTime()
-                    const maxRuntimeMs = Math.max(60_000, Number(process.env.DOCUMENT_INSPECTION_MAX_RUNTIME_MS || 300_000))
+                    const configuredMaxRuntimeMs = Number(process.env.DOCUMENT_INSPECTION_MAX_RUNTIME_MS || 900_000)
+                    const maxRuntimeMs = Number.isFinite(configuredMaxRuntimeMs)
+                        ? Math.max(60_000, Math.floor(configuredMaxRuntimeMs))
+                        : 900_000
                     const runtimeExpired = record.status === 'running'
                         && Number.isFinite(requestedAtMs)
                         && Date.now() - requestedAtMs > maxRuntimeMs
@@ -1492,6 +1495,28 @@ export class FirewireDocumentAnalysisData {
                                 runningRecord,
                                 runningRecord.requestedBy
                             )
+                        },
+                        onOpenAiResponseCreated: async (responseId, requestId) => {
+                            if (!sqldb || !runningRecord) {
+                                return
+                            }
+                            runningRecord = {
+                                ...runningRecord,
+                                openAiResponseId: responseId,
+                                openAiRequestId: requestId
+                            }
+                            await FirewireDocumentAnalysisData.saveAnalysisRecord(
+                                sqldb,
+                                runningRecord,
+                                runningRecord.requestedBy
+                            )
+                            console.info('[document-inspection] OpenAI background response accepted.', {
+                                analysisId: runningRecord.id,
+                                projectId: runningRecord.projectId,
+                                documentId: runningRecord.documentId,
+                                versionId: runningRecord.versionId,
+                                responseId
+                            })
                         },
                         onProgress: async (progress) => {
                             if (!sqldb || !runningRecord) {

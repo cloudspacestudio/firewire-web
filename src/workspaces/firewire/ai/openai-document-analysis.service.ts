@@ -1,5 +1,5 @@
 import Ajv, { ValidateFunction } from 'ajv'
-import OpenAI, { APIError, toFile } from 'openai'
+import OpenAI, { APIConnectionTimeoutError, APIError, toFile } from 'openai'
 import { PDFDocument } from 'pdf-lib'
 import sharp from 'sharp'
 import { DOMMatrix, ImageData, Path2D } from '@napi-rs/canvas'
@@ -17,6 +17,21 @@ import {
 } from './document-analysis.types'
 
 export const OPENAI_DOCUMENT_INPUT_MAX_BYTES = (50 * 1024 * 1024) - 1
+const DEFAULT_OPENAI_REQUEST_TIMEOUT_MS = 360000
+
+const getOpenAiRequestTimeoutMs = (): number => {
+    const configured = Number(process.env.OPENAI_TIMEOUT_MS || DEFAULT_OPENAI_REQUEST_TIMEOUT_MS)
+    return Number.isFinite(configured) && configured > 0
+        ? Math.max(60000, Math.floor(configured))
+        : DEFAULT_OPENAI_REQUEST_TIMEOUT_MS
+}
+
+const getOpenAiReasoningOptions = (): Record<string, unknown> => {
+    const effort = String(process.env.OPENAI_REASONING_EFFORT || '').trim().toLowerCase()
+    return ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)
+        ? { reasoning: { effort } }
+        : {}
+}
 
 const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
     'csv', 'doc', 'docx', 'md', 'pdf', 'ppt', 'pptx', 'tsv', 'txt', 'xls', 'xlsx'
@@ -33,6 +48,7 @@ export interface InspectDocumentInput {
     onProgress?: (progress: Omit<DocumentAnalysisProgress, 'updatedAt'>) => void | Promise<void>
     onOpenAiFileUploaded?: (fileId: string) => void | Promise<void>
     onOpenAiFileDeleted?: (fileId: string, deletedAt: string) => void | Promise<void>
+    onOpenAiResponseCreated?: (responseId: string, requestId: string) => void | Promise<void>
     signal?: AbortSignal
 }
 
@@ -190,7 +206,7 @@ export class OpenAiDocumentAnalysisService {
     async analyzeFloorplanDiagnostic(input: AnalyzeFloorplanDiagnosticInput): Promise<FloorplanDiagnosticResult> {
         this.validateConfiguration()
         if (!input.buffer.length) throw new DocumentAnalysisInputError('The floorplan has no readable content.', 400)
-        const client = new OpenAI({ apiKey: this.apiKey, timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000) })
+        const client = new OpenAI({ apiKey: this.apiKey, timeout: getOpenAiRequestTimeoutMs() })
         let uploadedFileId = ''
         try {
             const isImage = String(input.mimeType || '').toLowerCase().startsWith('image/')
@@ -213,6 +229,7 @@ export class OpenAiDocumentAnalysisService {
                 : Promise.resolve([] as FloorplanDiagnosticResult['symbolCandidates'])
             const response = await client.responses.create({
                 model: this.model,
+                ...getOpenAiReasoningOptions(),
                 store: false,
                 instructions: [
                     'Inspect one construction floorplan for diagnostic purposes. Do not claim that any project data was changed.',
@@ -338,6 +355,7 @@ export class OpenAiDocumentAnalysisService {
         const runPass = async (passContent: any[], passName: string): Promise<FloorplanDiagnosticResult['symbolCandidates']> => {
             const response = await client.responses.create({
                 model: this.model,
+                ...getOpenAiReasoningOptions(),
                 store: false,
                 instructions: 'Perform exhaustive symbol localization. Return only schema-constrained JSON. Coordinates are local to each crop.',
                 input: [{ role: 'user', content: passContent }],
@@ -417,7 +435,7 @@ export class OpenAiDocumentAnalysisService {
         const tiled = await this.createFloorplanAnalysisTiles(input.buffer)
         const client = new OpenAI({
             apiKey: this.apiKey,
-            timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000)
+            timeout: getOpenAiRequestTimeoutMs()
         })
         try {
             const tileResults: DocumentAnalysisFloorplanSymbolPlacement[][] = new Array(tiled.tiles.length)
@@ -467,6 +485,7 @@ export class OpenAiDocumentAnalysisService {
     ): Promise<DocumentAnalysisFloorplanSymbolPlacement[]> {
         const response = await client.responses.create({
                 model: this.model,
+                ...getOpenAiReasoningOptions(),
                 store: false,
                 instructions: [
                     'You are exhaustively locating fire alarm, sprinkler, or electronic security device symbols in one enlarged crop of a construction floorplan.',
@@ -622,7 +641,7 @@ export class OpenAiDocumentAnalysisService {
 
         const client = new OpenAI({
             apiKey: this.apiKey,
-            timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000)
+            timeout: getOpenAiRequestTimeoutMs()
         })
         const result: OpenAiFileCleanupResult = { deletedFileIds: [], missingFileIds: [] }
         for (const fileId of uniqueFileIds) {
@@ -646,13 +665,14 @@ export class OpenAiDocumentAnalysisService {
 
         const client = new OpenAI({
             apiKey: this.apiKey,
-            timeout: Number(process.env.OPENAI_TIMEOUT_MS || 180000)
+            timeout: getOpenAiRequestTimeoutMs()
         })
         let openAiFileId = ''
         let openAiFileDeletedAt = ''
         let inspectionResult: DocumentInspectionResult | null = null
         let openAiResponseId = ''
         let openAiRequestId = ''
+        let openAiResponseStatus = ''
 
         try {
             await this.reportProgress(input, 'uploading', 'Uploading the document to OpenAI.', 35)
@@ -673,9 +693,11 @@ export class OpenAiDocumentAnalysisService {
             const maxOutputTokens = Number.isFinite(configuredMaxOutputTokens)
                 ? Math.max(12000, Math.floor(configuredMaxOutputTokens))
                 : 30000
-            const response = await this.withAnalysisHeartbeat(input, () => client.responses.create({
+            let response = await client.responses.create({
                 model: this.model,
-                store: false,
+                ...getOpenAiReasoningOptions(),
+                background: true,
+                store: true,
                 instructions: this.getSystemInstructions(input.filename),
                 input: [{
                     role: 'user',
@@ -708,7 +730,46 @@ export class OpenAiDocumentAnalysisService {
                         schema: documentInspectionJsonSchema
                     }
                 }
-            }, { signal: input.signal }))
+            }, { signal: input.signal })
+            openAiResponseId = response.id
+            openAiRequestId = String((response as any)._request_id || '')
+            openAiResponseStatus = String(response.status || '')
+            await this.reportOpenAiResponseCreated(input, openAiResponseId, openAiRequestId)
+            await this.reportProgress(
+                input,
+                'analyzing',
+                `OpenAI accepted the background analysis (${openAiResponseStatus || 'queued'}). Waiting for grounded findings.`,
+                60
+            )
+
+            response = await this.withAnalysisHeartbeat(input, async () => {
+                let current = response
+                while (current.status === 'queued' || current.status === 'in_progress') {
+                    await this.waitForBackgroundPoll(input.signal)
+                    current = await client.responses.retrieve(current.id, {}, { signal: input.signal })
+                    openAiResponseStatus = String(current.status || '')
+                }
+                return current
+            })
+            openAiResponseStatus = String(response.status || '')
+            if (response.status !== 'completed') {
+                console.error('[document-inspection] OpenAI background analysis reached a non-completed terminal state.', {
+                    projectId: input.projectId,
+                    documentId: input.documentId,
+                    versionId: input.versionId,
+                    responseId: response.id,
+                    status: response.status,
+                    errorCode: response.error?.code || '',
+                    errorMessage: response.error?.message || '',
+                    incompleteReason: response.incomplete_details?.reason || ''
+                })
+                throw new DocumentAnalysisProviderError(
+                    `OpenAI ended the background analysis with status ${response.status || 'unknown'}. Try the inspection again.`,
+                    502,
+                    'OPENAI_BACKGROUND_RESPONSE_FAILED',
+                    true
+                )
+            }
 
             if (!response.output_text) {
                 throw new Error('OpenAI returned no document inspection output.')
@@ -726,12 +787,30 @@ export class OpenAiDocumentAnalysisService {
             const normalizedResult = this.normalizeProjectActions(parsed, input.projectContext)
             await this.reportProgress(input, 'locating-legend-symbols', 'Structured findings validated. Locating exact legend glyph artwork.', 90)
             inspectionResult = await this.enrichLegendSymbols(client, normalizedResult, input)
-            openAiResponseId = response.id
-            openAiRequestId = String((response as any)._request_id || '')
             await this.reportProgress(input, 'finalizing', 'Structured findings validated. Finalizing the inspection.', 95)
         } catch (error) {
+            if (openAiResponseId && (openAiResponseStatus === 'queued' || openAiResponseStatus === 'in_progress')) {
+                try {
+                    await client.responses.cancel(openAiResponseId)
+                } catch (cancelError) {
+                    console.error('OpenAI background response cancellation failed.', {
+                        responseId: openAiResponseId,
+                        message: cancelError instanceof Error ? cancelError.message : String(cancelError || '')
+                    })
+                }
+            }
             throw this.toProviderError(error)
         } finally {
+            if (openAiResponseId) {
+                try {
+                    await client.responses.delete(openAiResponseId)
+                } catch (cleanupError) {
+                    console.error('OpenAI background response cleanup failed.', {
+                        responseId: openAiResponseId,
+                        message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError || '')
+                    })
+                }
+            }
             if (openAiFileId) {
                 try {
                     await client.files.delete(openAiFileId)
@@ -843,6 +922,34 @@ export class OpenAiDocumentAnalysisService {
         }
     }
 
+    private async reportOpenAiResponseCreated(
+        input: InspectDocumentInput,
+        responseId: string,
+        requestId: string
+    ): Promise<void> {
+        if (!input.onOpenAiResponseCreated) {
+            return
+        }
+        try {
+            await input.onOpenAiResponseCreated(responseId, requestId)
+        } catch (error) {
+            console.error('OpenAI background response tracking failed.', {
+                responseId,
+                message: error instanceof Error ? error.message : String(error || '')
+            })
+        }
+    }
+
+    private async waitForBackgroundPoll(signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) {
+            throw signal.reason instanceof Error ? signal.reason : new Error('Document inspection was aborted.')
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 5000))
+        if (signal?.aborted) {
+            throw signal.reason instanceof Error ? signal.reason : new Error('Document inspection was aborted.')
+        }
+    }
+
     private async enrichLegendSymbols(
         client: OpenAI,
         result: DocumentInspectionResult,
@@ -925,6 +1032,7 @@ export class OpenAiDocumentAnalysisService {
             }
             const response = await client.responses.create({
                 model: this.model,
+                ...getOpenAiReasoningOptions(),
                 store: false,
                 instructions: [
                     'Locate the exact printed legend glyph artwork for each supplied Firewire BOM proposal in this PDF.',
@@ -1658,6 +1766,14 @@ export class OpenAiDocumentAnalysisService {
     }
 
     private toProviderError(error: unknown): unknown {
+        if (error instanceof APIConnectionTimeoutError) {
+            return new DocumentAnalysisProviderError(
+                'OpenAI did not complete this inspection stage within the configured request time. Increase OPENAI_TIMEOUT_MS for slower models, then try again.',
+                504,
+                'OPENAI_REQUEST_TIMED_OUT',
+                true
+            )
+        }
         if (!(error instanceof APIError)) {
             return error
         }

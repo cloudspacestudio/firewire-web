@@ -708,7 +708,19 @@ export class FieldwireSDK {
     public async taskStatusChangesWithDetails(projectId: string, startDate: string, endDate: string): Promise<FieldwireTaskStatusChangeResult> {
         return new Promise(async (resolve, reject) => {
             try {
-                const statuses = normalizeArray(await this.statuses(projectId) as any)
+                const [statusesResult, projectUsersResult] = await Promise.all([
+                    this.statuses(projectId),
+                    this.accountProjectUsers(projectId).catch(() => [])
+                ])
+                const statuses = normalizeArray(statusesResult as any)
+                const projectUsers = normalizeArray(projectUsersResult as any)
+                const projectUsersById = new Map<number, any>()
+                for (const user of projectUsers) {
+                    const userId = toNullableNumber(user?.id)
+                    if (userId !== null) {
+                        projectUsersById.set(userId, user)
+                    }
+                }
                 const taskDetailCache = new Map<string, any>()
                 const output: FieldwireTaskStatusChangeRow[] = []
                 const statusScan: FieldwireTaskStatusChangeStatusScan[] = []
@@ -738,7 +750,7 @@ export class FieldwireSDK {
                             taskDetailCache.set(taskId, taskDetail)
                         }
 
-                        output.push(flattenTaskStatusChange(projectId, status, statusTask, taskDetail))
+                        output.push(flattenTaskStatusChange(projectId, status, statusTask, taskDetail, projectUsersById))
                     }
                 }
 
@@ -1558,8 +1570,20 @@ function normalizeArray(value: any): any[] {
     return []
 }
 
-function flattenTaskStatusChange(projectId: string, status: any, statusTask: any, taskDetail: any): FieldwireTaskStatusChangeRow {
+function flattenTaskStatusChange(projectId: string, status: any, statusTask: any, taskDetail: any, projectUsersById: Map<number, any>): FieldwireTaskStatusChangeRow {
     const task = normalizeTaskDetail(taskDetail) || statusTask || {}
+    const technicianUserId = toNullableNumber(statusTask?.last_editor_user_id ?? task.last_editor_user_id)
+    const technician = technicianUserId === null ? null : projectUsersById.get(technicianUserId)
+    const technicianFirstName = stringify(technician?.first_name).trim()
+    const technicianLastName = stringify(technician?.last_name).trim()
+    const technicianEmail = stringify(
+        technician?.email
+        || normalizeArray(technician?.email_address).find((address) => address?.is_primary)?.email
+        || normalizeArray(technician?.email_address)[0]?.email
+    ).trim()
+    const technicianName = [technicianFirstName, technicianLastName].filter(Boolean).join(' ')
+        || technicianEmail
+        || (technicianUserId === null ? 'Unknown user' : `Fieldwire user ${technicianUserId}`)
     return {
         fieldwireProjectId: projectId,
         taskId: stringify(task.id || statusTask?.id || statusTask?.task_id),
@@ -1579,6 +1603,9 @@ function flattenTaskStatusChange(projectId: string, status: any, statusTask: any
         fixedAt: stringify(task.fixed_at || statusTask?.fixed_at),
         verifiedAt: stringify(task.verified_at || statusTask?.verified_at),
         ownerUserId: toNullableNumber(task.owner_user_id || statusTask?.owner_user_id),
+        technicianUserId,
+        technicianName,
+        technicianEmail,
         floorplanId: stringify(task.floorplan_id || statusTask?.floorplan_id),
         locationId: stringify(task.location_id || statusTask?.location_id),
         teamId: stringify(task.team_id || statusTask?.team_id),
@@ -1633,6 +1660,9 @@ export interface FieldwireTaskStatusChangeRow {
     fixedAt: string
     verifiedAt: string
     ownerUserId: number | null
+    technicianUserId: number | null
+    technicianName: string
+    technicianEmail: string
     floorplanId: string
     locationId: string
     teamId: string

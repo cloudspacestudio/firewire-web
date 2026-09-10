@@ -53,10 +53,11 @@ Used by `AzureBlobDocumentStorage` for project document content. SQL/workspace s
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_TIMEOUT_MS`
+- `OPENAI_REASONING_EFFORT`
 - `OPENAI_DOCUMENT_MAX_OUTPUT_TOKENS`
 - `DOCUMENT_INSPECTION_MAX_RUNTIME_MS`
 
-`OPENAI_API_KEY` and `OPENAI_MODEL` are required to run document inspection. Both are server-only; never expose either value through Angular configuration, API responses, logs, or committed files. `OPENAI_TIMEOUT_MS` is optional and defaults to 180000 milliseconds for an individual SDK request. `OPENAI_DOCUMENT_MAX_OUTPUT_TOKENS` is optional, defaults to 30000, and has a 12000 minimum so multi-floorplan results can retain per-symbol location evidence. `DOCUMENT_INSPECTION_MAX_RUNTIME_MS` is optional and defaults to 300000 milliseconds; status reads use it as a terminal safety lease for a running inspection.
+`OPENAI_API_KEY` and `OPENAI_MODEL` are required to run document inspection. Both are server-only; never expose either value through Angular configuration, API responses, logs, or committed files. `OPENAI_TIMEOUT_MS` is optional and defaults to 360000 milliseconds for an individual SDK request; slower reasoning models may need a larger value. `OPENAI_REASONING_EFFORT` is optional and, when set to `low`, `medium`, `high`, `xhigh`, or `max`, is supplied to every document-analysis Responses API call; use `low` as the initial GPT-6 Astra migration setting unless an evaluated quality requirement justifies more reasoning. `OPENAI_DOCUMENT_MAX_OUTPUT_TOKENS` is optional, defaults to 30000, and has a 12000 minimum so multi-floorplan results can retain per-symbol location evidence. `DOCUMENT_INSPECTION_MAX_RUNTIME_MS` is optional and defaults to 900000 milliseconds; status reads use it as a terminal safety lease for the complete multi-stage inspection, so it should remain comfortably larger than the individual OpenAI request timeout.
 
 ## Primary SQL Server
 
